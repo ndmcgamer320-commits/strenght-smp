@@ -2,7 +2,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import fs from "node:fs/promises";
 
-const ADDRESS = process.env.STATUS_HOST || "strength.mcsh.oi";
+const ADDRESSES = (process.env.STATUS_HOSTS || "s1strength.mcsh.io,144.31.46.15:12565").split(",").map(value=>value.trim()).filter(Boolean);
 const TIMEOUT = 8000;
 const PROTOCOL = 767;
 
@@ -113,8 +113,8 @@ function packet(payload){
   return Buffer.concat([varInt(payload.length),payload]);
 }
 
-async function pingMinecraft(){
-  const target=await resolveTarget(ADDRESS);
+async function pingMinecraft(address){
+  const target=await resolveTarget(address);
 
   return await new Promise((resolve,reject)=>{
     const socket=net.createConnection({
@@ -187,7 +187,39 @@ async function pingMinecraft(){
 }
 
 try{
-  const status=await pingMinecraft();
+    const results=await Promise.allSettled(ADDRESSES.map(address=>pingMinecraft(address)));
+  const successful=results.filter(result=>result.status==="fulfilled").map(result=>result.value);
+  const online=successful.find(result=>result.online===true);
+
+  let status;
+  if(online){
+    status=online;
+  }else if(successful.length===ADDRESSES.length && successful.every(result=>result.online===false)){
+    status={
+      online:false,
+      state:"OFFLINE",
+      players:null,
+      max:null,
+      version:null,
+      motd:"",
+      checkedAt:new Date().toISOString(),
+      source:"direct-java-status-ping"
+    };
+  }else{
+    const errors=results.filter(result=>result.status==="rejected").map(result=>result.reason?.message || "Unknown error");
+    status={
+      online:null,
+      state:"UNKNOWN",
+      players:null,
+      max:null,
+      version:null,
+      motd:"",
+      checkedAt:new Date().toISOString(),
+      source:"direct-java-status-ping",
+      errors
+    };
+  }
+
   await fs.writeFile("status.json",JSON.stringify(status,null,2)+"\n");
   console.log(JSON.stringify(status));
 }catch(error){

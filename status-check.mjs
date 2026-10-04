@@ -2,7 +2,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import fs from "node:fs/promises";
 
-const ADDRESS = process.env.STATUS_HOST || "strenght.mcsh.oi";
+const ADDRESS = process.env.STATUS_HOST || "strength.mcsh.oi";
 const TIMEOUT = 8000;
 const PROTOCOL = 767;
 

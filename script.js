@@ -1,5 +1,5 @@
 const IP="s1strength.mcsh.io";
-const STATUS_URL="https://raw.githubusercontent.com/ndmcgamer320-commits/strenght-smp/status-data/status.json";
+const STATUS_URL="./status.json";
 const STALE_AFTER=12*60*1000;
 
 // Set BOT_API_URL to your deployed bot service URL.

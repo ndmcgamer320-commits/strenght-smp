@@ -1,0 +1,45 @@
+name: Live Minecraft Server Status
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  check-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Direct Minecraft status check
+        env:
+          STATUS_HOST: strenght.mcsh.oi
+        run: node status-check.mjs
+
+      - name: Publish status branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp status.json /tmp/status.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout --orphan status-data
+          git rm -rf .
+          cp /tmp/status.json status.json
+          git add status.json
+          git commit -m "Update live server status" || true
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" status-data --force

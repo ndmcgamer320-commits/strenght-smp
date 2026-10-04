@@ -54,8 +54,10 @@ async function updateServer(){
 
     if(data.online===true){
       setStatus("ONLINE",data.players?.online ?? data.players,data.players?.max ?? data.max);
-    }else{
+    }else if(data.online===false && data.state!=="UNKNOWN"){
       setStatus("OFFLINE",null,null);
+    }else{
+      setStatus("UNKNOWN",null,null);
     }
   }catch(error){
     $("statusText").textContent="UNKNOWN";

@@ -1,4 +1,4 @@
-const IP="strenght.mcsh.oi";
+const IP="strength.mcsh.oi";
 const STATUS_URL="https://raw.githubusercontent.com/ndmcgamer320-commits/strenght-smp/status-data/status.json";
 const STALE_AFTER=12*60*1000;
 

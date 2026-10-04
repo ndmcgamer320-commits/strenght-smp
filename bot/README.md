@@ -1,63 +1,69 @@
 # Strength SMP Bot
 
-This is the actual Minecraft bot service for the website.
+The bot connects to **s1strength.mcsh.io:12565** and handles the server's graphical authentication flow.
 
-## Server
+## Pre-join registration GUI
 
-- Address: s1strength.mcsh.io
-- Port: 12565
-- Bot library: Mineflayer 4.39.0
+The server can show its register/login dialog during Minecraft's **configuration phase**, before the player fully joins. AuthMe documents this as its Paper/Folia pre-join dialog flow, and Minecraft 1.21.11 defines the `show_dialog` and `custom_click_action` packets for this stage. citeturn599692search0turn878506search4
 
-Mineflayer's current upstream package supports the 1.21.11 line and uses Node 22 in its package metadata. citeturn821248search0turn821248search3
+This version of the bot does **not** send `/register` or `/login` on spawn.
 
-## Run it
+Instead it:
 
-From this folder:
+1. Watches for the `show_dialog` packet.
+2. Detects whether the dialog looks like registration or login.
+3. Finds a matching register/login action ID when one is present.
+4. Sends a `custom_click_action` packet with the private password payload.
+5. Continues into the normal connection if the server accepts the dialog.
 
-```bash
-npm install
-npm start
-```
+The protocol supports `custom_click_action` in the configuration state, and recent minecraft-protocol versions include the 1.21.11 packet definitions. citeturn824410search0turn878506search4turn151651search0
 
-Set the environment variables from `.env.example` in your host's secret/environment settings.
+### Configuration
 
-For an offline/cracked server:
+Set these only in your bot host's environment/secret settings:
 
 ```
 BOT_HOST=s1strength.mcsh.io
 BOT_PORT=12565
 BOT_USERNAME=StrengthBot
 BOT_AUTH=offline
-BOT_REGISTER_PASSWORD=YOUR_PRIVATE_PASSWORD
-BOT_REGISTER_COMMAND=/register __BOT_REGISTER_PASSWORD__ __BOT_REGISTER_PASSWORD__
-BOT_LOGIN_COMMAND=/login __BOT_REGISTER_PASSWORD__
+
+PREJOIN_PASSWORD=YOUR_PRIVATE_BOT_PASSWORD
+PREJOIN_EMAIL=
+PREJOIN_REGISTER=true
+
+PREJOIN_REGISTER_ACTION=nlogin:register/yes
+PREJOIN_LOGIN_ACTION=nlogin:login/yes
+
+PREJOIN_PASSWORD_FIELD=password
+PREJOIN_CONFIRM_FIELD=confirm_password
+PREJOIN_EMAIL_FIELD=email
+
 BOT_API_KEY=YOUR_PRIVATE_API_KEY
 CORS_ORIGIN=https://ndmcgamer320-commits.github.io
 ALLOWED_COMMANDS=list,time,weather,say,help
 AUTO_CONNECT=true
 ```
 
-The bot never needs you to put the password or API key in GitHub.
+Do not paste the real password or API key into GitHub or into this chat.
 
-For Microsoft-authenticated servers, set `BOT_AUTH=microsoft` and use the Minecraft account identifier in `BOT_USERNAME`. citeturn821248search3turn821248search7
+### Why the previous version failed
 
-## Website control
+The old bot tried to send chat commands after spawn. Your server is using a graphical pre-join authentication flow, so those commands are the wrong mechanism. AuthMe's current documentation confirms that this kind of registration dialog can appear before the player fully joins. citeturn599692search2turn603403search0
 
-Deploy this bot service somewhere that can keep a Node process running.
+The bot now watches the configuration-state dialog instead.
 
-On the website, press **CONNECT** in the Bot Control panel. The first time, enter the deployed bot service URL and your private `BOT_API_KEY`. They are kept only in the browser session.
+### nLogin note
 
-The website can then request:
+The protocol issue that documents the 1.21.6+ custom-click flow shows the `nlogin:login/yes` action and an NBT payload field named `password`. citeturn753084search0
 
-- bot state
-- connect
-- disconnect
-- allowlisted Minecraft commands
+Because nLogin is proprietary, the exact register payload can vary by its current implementation. The bot therefore lets you set the action ID and payload field names through environment variables without putting credentials in the repository.
 
-Commands are intentionally allowlisted. Add more command names in `ALLOWED_COMMANDS` when configuring your own server.
+### Run
 
-## Registration GUI
+```bash
+npm install
+npm start
+```
 
-A Minecraft bot cannot complete a server's external hosting-panel GUI before it connects to the Minecraft server. The included registration/login hooks run after the bot spawns, which covers chat-based auth plugins.
-
-If your server uses an in-game inventory GUI for authentication, its exact buttons/slots depend on the plugin, so a plugin-specific GUI handler would need the plugin name and layout.
+For a host that uses the included Render Blueprint, put the secrets in the service environment settings and deploy the `bot` directory.

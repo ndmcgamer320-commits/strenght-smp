@@ -142,12 +142,19 @@ async function pingMinecraft(address){
         socket.write(packet(handshake));
         socket.write(packet(Buffer.from([0x00])));
 
-        await readVarInt(reader);
-        const responseLength=await readVarInt(reader);
-        const response=await reader.read(responseLength);
+        const packetLength=await readVarInt(reader);
+        const response=await reader.read(packetLength);
 
         let offset=0;
-        const packetId=response[offset++];
+        let packetId=0;
+        let packetIdShift=0;
+        for(let i=0;i<5;i++){
+          const byte=response[offset++];
+          packetId |= (byte & 0x7f) << packetIdShift;
+          if((byte & 0x80)===0) break;
+          packetIdShift+=7;
+        }
+
         if(packetId!==0x00) throw new Error("Unexpected status packet");
 
         let shift=0;

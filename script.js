@@ -107,13 +107,23 @@ function getBotKey(){
   return key||"";
 }
 
+function getBotURL(promptUser=false){
+  let url=BOT_API_URL||sessionStorage.getItem("strengthBotURL")||"";
+  if(!url&&promptUser){
+    url=(prompt("Enter your deployed bot service URL:")||"").trim();
+    if(url) sessionStorage.setItem("strengthBotURL",url);
+  }
+  return url.replace(/\\/$/,"");
+}
+
 function botUnavailable(){
   $("botStatus").textContent="SERVICE NOT CONNECTED";
-  $("botDetail").textContent="Set STRENGTH_BOT_API_URL in the page deployment to enable the bot.";
+  $("botDetail").textContent="Deploy the bot service, then use CONNECT to add its URL.";
 }
 
 async function botRequest(path,options={}){
-  if(!BOT_API_URL){
+  const url=getBotURL(true);
+  if(!url){
     botUnavailable();
     throw new Error("Bot service URL is not configured");
   }
@@ -121,7 +131,7 @@ async function botRequest(path,options={}){
   const key=getBotKey();
   if(!key) throw new Error("Bot API key not provided");
 
-  const response=await fetch(BOT_API_URL.replace(/\/$/,"")+path,{
+  const response=await fetch(url+path,{
     ...options,
     headers:{
       "Content-Type":"application/json",
@@ -136,7 +146,7 @@ async function botRequest(path,options={}){
 }
 
 async function refreshBot(){
-  if(!BOT_API_URL){botUnavailable();return;}
+  if(!getBotURL(false)){botUnavailable();return;}
 
   try{
     const data=await botRequest("/state");

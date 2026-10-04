@@ -1,14 +1,14 @@
 const IP="s1strength.mcsh.io";
-const STATUS_URL="./status.json";
-const STALE_AFTER=12*60*1000;
 
-// Set BOT_API_URL to your deployed bot service URL.
-// Never put the bot API key in this file. The browser asks for it when needed.
-const BOT_API_URL=window.STRENGTH_BOT_API_URL||"";
+const STATUS_APIS=[
+  "https://minecraftstatus.com/api/v1/status/java?address="+encodeURIComponent(IP),
+  "https://minecraftstatus.com/api/v1/status/java?address="+encodeURIComponent("144.31.46.15:12565")
+];
 
 const $=id=>document.getElementById(id);
+let statusRequestRunning=false;
 
-function setStatus(state,players,max,checkedAt=null){
+function setStatus(state,players,max,checkedAt=null,source="MinecraftStatus.com"){
   const online=state==="ONLINE";
   const checking=state==="CHECKING";
 
@@ -22,8 +22,9 @@ function setStatus(state,players,max,checkedAt=null){
 
   $("heroPlayers").textContent=checking?"—":online?(players??"—"):"—";
   $("heroStatus").textContent=state;
+
   $("visualStatus").textContent=checking
-    ?"Checking live server data..."
+    ?"Checking live server..."
     :online
       ?"Server is online"
       :state==="UNKNOWN"
@@ -31,20 +32,75 @@ function setStatus(state,players,max,checkedAt=null){
         :"Server is offline";
 
   $("visualPlayers").textContent=checking
-    ?"Contacting the server monitor"
+    ?"Contacting status service"
     :online
       ?((players??"—")+" players online")
-      :"No live data available";
+      :state==="UNKNOWN"
+        ?"No verified status"
+        :"No players online";
 
   if(checkedAt){
     const time=new Date(checkedAt);
     $("statusMeta").textContent="Last checked "+time.toLocaleTimeString([],{
-      hour:"2-digit",minute:"2-digit",second:"2-digit"
-    })+" • Direct Minecraft ping";
+      hour:"2-digit",
+      minute:"2-digit",
+      second:"2-digit"
+    })+" • "+source;
   }
 }
 
+async function getExternalStatus(url,signal){
+  const response=await fetch(url,{
+    cache:"no-store",
+    signal,
+    headers:{Accept:"application/json"}
+  });
+
+  if(!response.ok){
+    if(response.status===429){
+      throw new Error("Status service rate limited");
+    }
+    throw new Error("Status service returned "+response.status);
+  }
+
+  const data=await response.json();
+
+  // MinecraftStatus gives a bounded observation. Expired observations must
+  // never be presented as current.
+  const validUntil=Date.parse(data.validUntil||"");
+  const observedAt=Date.parse(data.observedAt||"");
+
+  if(validUntil && Date.now()>validUntil){
+    throw new Error("Observation expired");
+  }
+
+  if(data.freshness && data.freshness!=="fresh"){
+    throw new Error("Observation is not fresh");
+  }
+
+  if(!data.verdict){
+    throw new Error("No server verdict returned");
+  }
+
+  return {
+    state:
+      data.verdict==="online"
+        ?"ONLINE"
+        :data.verdict==="offline"
+          ?"OFFLINE"
+          :"UNKNOWN",
+    players:data.players?.online??null,
+    max:data.players?.max??null,
+    checkedAt:data.observedAt||null,
+    source:"MinecraftStatus.com",
+    observedAt
+  };
+}
+
 async function updateServer(manual=false){
+  if(statusRequestRunning) return;
+  statusRequestRunning=true;
+
   const refresh=$("refreshStatus");
   if(refresh){
     refresh.disabled=true;
@@ -52,41 +108,34 @@ async function updateServer(manual=false){
   }
 
   setStatus("CHECKING",null,null);
-  $("statusMeta").textContent=manual
-    ?"Checking live server..."
-    :"Checking live server...";
 
   const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),8000);
+  const timeout=setTimeout(()=>controller.abort(),4500);
 
   try{
-    const response=await fetch(STATUS_URL+"?t="+Date.now(),{
-      cache:"no-store",
-      signal:controller.signal
-    });
+    const results=await Promise.allSettled(
+      STATUS_APIS.map(url=>getExternalStatus(url,controller.signal))
+    );
 
-    if(!response.ok) throw new Error("Status file unavailable");
+    const successful=results
+      .filter(result=>result.status==="fulfilled")
+      .map(result=>result.value);
 
-    // status-data/status.json is raw JSON, not a GitHub Contents API wrapper.
-    const data=await response.json();
-    const checkedAt=Date.parse(data.checkedAt||"");
+    // Prefer a verified ONLINE observation from either address.
+    const online=successful.find(result=>result.state==="ONLINE");
 
-    if(!checkedAt||Date.now()-checkedAt>STALE_AFTER){
-      throw new Error("Status data is stale");
+    if(online){
+      setStatus(online.state,online.players,online.max,online.checkedAt,online.source);
+      return;
     }
 
-    if(data.online===true){
-      setStatus(
-        "ONLINE",
-        data.players?.online ?? data.players,
-        data.players?.max ?? data.max,
-        data.checkedAt
-      );
-    }else if(data.online===false){
-      setStatus("OFFLINE",null,null,data.checkedAt);
-    }else{
-      setStatus("UNKNOWN",null,null,data.checkedAt);
+    const offline=successful.find(result=>result.state==="OFFLINE");
+    if(offline && successful.every(result=>result.state==="OFFLINE")){
+      setStatus("OFFLINE",null,null,offline.checkedAt,offline.source);
+      return;
     }
+
+    throw new Error("No fresh verified observation");
   }catch(error){
     $("statusText").textContent="UNKNOWN";
     $("statusIcon").textContent="?";
@@ -94,15 +143,18 @@ async function updateServer(manual=false){
     $("players").textContent="— / —";
     $("heroPlayers").textContent="—";
     $("heroStatus").textContent="UNKNOWN";
-    $("visualStatus").textContent="Live status unavailable";
-    $("visualPlayers").textContent=error?.name==="AbortError"
+    $("visualStatus").textContent=error?.name==="AbortError"
       ?"Status request timed out"
-      :"No fresh status data";
+      :"Live status unavailable";
+    $("visualPlayers").textContent=error?.message==="Status service rate limited"
+      ?"Status service rate limited"
+      :"No fresh verified data";
     $("statusMeta").textContent=manual
       ?"Refresh failed — try again"
-      :"Status check unavailable";
+      :"Waiting for a fresh status observation";
   }finally{
     clearTimeout(timeout);
+    statusRequestRunning=false;
     if(refresh){
       refresh.disabled=false;
       refresh.classList.remove("spinning");
@@ -120,12 +172,12 @@ function getBotKey(){
 }
 
 function getBotURL(promptUser=false){
-  let url=BOT_API_URL||sessionStorage.getItem("strengthBotURL")||"";
+  let url=window.STRENGTH_BOT_API_URL||sessionStorage.getItem("strengthBotURL")||"";
   if(!url&&promptUser){
     url=(prompt("Enter your deployed bot service URL:")||"").trim();
     if(url) sessionStorage.setItem("strengthBotURL",url);
   }
-  return url.replace(/\\/$/,"");
+  return url.replace(/\/$/,"");
 }
 
 function botUnavailable(){
@@ -164,9 +216,9 @@ async function refreshBot(){
     const data=await botRequest("/state");
     $("botStatus").textContent=data.connected?"ONLINE":"OFFLINE";
     $("botDetail").textContent=data.username
-      ?data.username+" • "+(data.host||IP)
+      ?data.username+" • "+(data.host||IP)+":"+data.port
       :"Bot service reachable";
-    $("botLog").textContent=data.message||"Bot status refreshed.";
+    $("botLog").textContent=data.lastEvent||"Bot status refreshed.";
   }catch(error){
     $("botStatus").textContent="UNAVAILABLE";
     $("botDetail").textContent=error.message;
@@ -176,8 +228,8 @@ async function refreshBot(){
 async function connectBot(){
   try{
     const data=await botRequest("/connect",{method:"POST",body:"{}"});
-    $("botStatus").textContent=data.connected?"CONNECTING":"OFFLINE";
-    $("botDetail").textContent=data.message||"Connect requested.";
+    $("botStatus").textContent=data.connected?"ONLINE":"CONNECTING";
+    $("botDetail").textContent=data.message||"Connection requested.";
     $("botLog").textContent=data.message||"";
   }catch(error){
     $("botLog").textContent="ERROR: "+error.message;
@@ -205,7 +257,7 @@ async function sendBotCommand(){
       method:"POST",
       body:JSON.stringify({command})
     });
-    $("botLog").textContent=(data.output||data.message||"Command sent.");
+    $("botLog").textContent=data.output||data.message||"Command sent.";
     input.value="";
   }catch(error){
     $("botLog").textContent="ERROR: "+error.message;
@@ -232,7 +284,7 @@ $("botCommand")?.addEventListener("keydown",event=>{
 });
 
 updateServer();
-setInterval(()=>updateServer(false),30000);
+setInterval(()=>updateServer(false),5000);
 refreshBot();
 setInterval(refreshBot,15000);
 

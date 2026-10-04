@@ -25,6 +25,8 @@ let bot = null;
 let connecting = false;
 let lastError = "";
 let lastEvent = "Starting bot service";
+let reconnectTimer = null;
+let reconnectDelay = 5000;
 
 function logEvent(message) {
   lastEvent = message;
@@ -61,10 +63,30 @@ function sendStartupCommand(command) {
   bot.chat(rendered);
 }
 
+function scheduleReconnect() {
+  if (reconnectTimer || !AUTO_CONNECT) return;
+
+  const delay = reconnectDelay;
+  logEvent("Reconnecting in " + Math.round(delay / 1000) + "s");
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+
+  reconnectDelay = Math.min(reconnectDelay * 2, 60000);
+}
+
 function connect() {
   if (bot || connecting) {
     return { connected: Boolean(bot), connecting };
   }
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  reconnectDelay = 5000;
 
   connecting = true;
   lastError = "";
@@ -86,6 +108,7 @@ function connect() {
 
   bot.once("spawn", () => {
     connecting = false;
+    reconnectDelay = 5000;
     logEvent("Bot spawned");
 
     setTimeout(() => {
@@ -104,18 +127,21 @@ function connect() {
     logEvent("Bot kicked");
     bot = null;
     connecting = false;
+    scheduleReconnect();
   });
 
   bot.on("end", () => {
     logEvent("Bot disconnected");
     bot = null;
     connecting = false;
+    scheduleReconnect();
   });
 
   bot.on("error", error => {
     lastError = error && error.message ? error.message : String(error);
     logEvent("Bot error: " + lastError);
     connecting = false;
+    if (!bot) scheduleReconnect();
   });
 
   return { connected: false, connecting: true };

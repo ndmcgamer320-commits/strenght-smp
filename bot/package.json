@@ -1,0 +1,17 @@
+{
+  "name": "strength-smp-bot",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Mineflayer bot and protected control API for Strength SMP",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mineflayer": "^4.39.0"
+  }
+}

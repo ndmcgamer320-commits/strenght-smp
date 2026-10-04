@@ -1,3 +1,4 @@
+require("dotenv").config();
 const mineflayer = require("mineflayer");
 const express = require("express");
 const nbt = require("prismarine-nbt");
@@ -350,7 +351,7 @@ app.post("/command", requireKey, (req, res) => {
   }
 });
 
-app.listen(HTTP_PORT, () => {
+app.listen(HTTP_PORT, "0.0.0.0", () => {
   logEvent("Bot API listening on port " + HTTP_PORT);
   if (AUTO_CONNECT) connect();
 });

@@ -1,6 +1,5 @@
 const mineflayer = require("mineflayer");
 const express = require("express");
-const nbt = require("prismarine-nbt");
 
 const HOST = process.env.BOT_HOST || "s1strength.mcsh.io";
 const PORT = Number(process.env.BOT_PORT || 12565);
@@ -46,8 +45,8 @@ function prepareCommand(command) {
   if (!value) throw new Error("Command is empty");
   if (value.length > 120) throw new Error("Command is too long");
 
-  value = value.replace(/^\/++/, "");
-  const name = value.split(/\\s+/)[0].toLowerCase();
+  value = value.replace(/^\/+/, "");
+  const name = value.split(/\s+/)[0].toLowerCase();
 
   if (!ALLOWED_COMMANDS.has(name)) {
     throw new Error("Command not allowed: /" + name);

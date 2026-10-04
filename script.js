@@ -7,37 +7,31 @@ const STATUS_APIS=[
 
 const $=id=>document.getElementById(id);
 let statusRequestRunning=false;
+let lastGoodStatus=null;
 
-function setStatus(state,players,max,checkedAt=null,source="MinecraftStatus.com"){
-  const online=state==="ONLINE";
-  const checking=state==="CHECKING";
-
-  $("statusText").textContent=checking?"CHECKING":online?"ONLINE":state;
-  $("statusIcon").textContent=checking?"◌":online?"●":state==="UNKNOWN"?"?":"○";
-  $("statusIcon").style.color=checking?"#a78bfa":online?"#34d399":state==="UNKNOWN"?"#f59e0b":"#fb7185";
-
-  $("players").textContent=checking?"— / —":online
+function renderStatusText(state,players,max){
+  $("statusText").textContent=state==="ONLINE"?"ONLINE":state;
+  $("statusIcon").textContent=state==="ONLINE"?"●":state==="UNKNOWN"?"?":"○";
+  $("statusIcon").style.color=state==="ONLINE"?"#34d399":state==="UNKNOWN"?"#f59e0b":"#fb7185";
+  $("players").textContent=state==="ONLINE"
     ?((players??"—")+" / "+(max??"—"))
     :"— / —";
-
-  $("heroPlayers").textContent=checking?"—":online?(players??"—"):"—";
+  $("heroPlayers").textContent=state==="ONLINE"?(players??"—"):"—";
   $("heroStatus").textContent=state;
+  $("visualStatus").textContent=state==="ONLINE"
+    ?"Server is online"
+    :state==="OFFLINE"
+      ?"Server is offline"
+      :"Live status unavailable";
+  $("visualPlayers").textContent=state==="ONLINE"
+    ?((players??"—")+" players online")
+    :state==="OFFLINE"
+      ?"No players online"
+      :"No fresh verified data";
+}
 
-  $("visualStatus").textContent=checking
-    ?"Checking live server..."
-    :online
-      ?"Server is online"
-      :state==="UNKNOWN"
-        ?"Live status unavailable"
-        :"Server is offline";
-
-  $("visualPlayers").textContent=checking
-    ?"Contacting status service"
-    :online
-      ?((players??"—")+" players online")
-      :state==="UNKNOWN"
-        ?"No verified status"
-        :"No players online";
+function setStatus(state,players,max,checkedAt=null,source="MinecraftStatus.com"){
+  renderStatusText(state,players,max);
 
   if(checkedAt){
     const time=new Date(checkedAt);
@@ -56,44 +50,42 @@ async function getExternalStatus(url,signal){
     headers:{Accept:"application/json"}
   });
 
+  if(response.status===429){
+    const retryAfter=response.headers.get("Retry-After");
+    throw new Error("RATE_LIMITED"+(retryAfter?":"+retryAfter:""));
+  }
+
   if(!response.ok){
-    if(response.status===429){
-      throw new Error("Status service rate limited");
-    }
     throw new Error("Status service returned "+response.status);
   }
 
   const data=await response.json();
 
-  // MinecraftStatus gives a bounded observation. Expired observations must
-  // never be presented as current.
-  const validUntil=Date.parse(data.validUntil||"");
   const observedAt=Date.parse(data.observedAt||"");
+  const validUntil=Date.parse(data.validUntil||"");
 
   if(validUntil && Date.now()>validUntil){
     throw new Error("Observation expired");
   }
 
   if(data.freshness && data.freshness!=="fresh"){
-    throw new Error("Observation is not fresh");
+    throw new Error("Observation not fresh");
   }
 
-  if(!data.verdict){
-    throw new Error("No server verdict returned");
-  }
+  const state=
+    data.verdict==="online"
+      ?"ONLINE"
+      :data.verdict==="offline"
+        ?"OFFLINE"
+        :"UNKNOWN";
 
   return {
-    state:
-      data.verdict==="online"
-        ?"ONLINE"
-        :data.verdict==="offline"
-          ?"OFFLINE"
-          :"UNKNOWN",
+    state,
     players:data.players?.online??null,
     max:data.players?.max??null,
     checkedAt:data.observedAt||null,
-    source:"MinecraftStatus.com",
-    observedAt
+    validUntil,
+    source:"MinecraftStatus.com"
   };
 }
 
@@ -107,7 +99,10 @@ async function updateServer(manual=false){
     refresh.classList.add("spinning");
   }
 
-  setStatus("CHECKING",null,null);
+  renderStatusText("CHECKING",null,null);
+  $("statusMeta").textContent=manual
+    ?"Testing MinecraftStatus.com..."
+    :"Refreshing every 5 seconds...";
 
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),4500);
@@ -121,46 +116,73 @@ async function updateServer(manual=false){
       .filter(result=>result.status==="fulfilled")
       .map(result=>result.value);
 
-    // Prefer a verified ONLINE observation from either address.
     const online=successful.find(result=>result.state==="ONLINE");
 
     if(online){
-      setStatus(online.state,online.players,online.max,online.checkedAt,online.source);
+      lastGoodStatus=online;
+      setStatus("ONLINE",online.players,online.max,online.checkedAt,online.source);
       return;
     }
 
-    const offline=successful.find(result=>result.state==="OFFLINE");
-    if(offline && successful.every(result=>result.state==="OFFLINE")){
+    const allOffline=
+      successful.length>0 &&
+      successful.length===STATUS_APIS.length &&
+      successful.every(result=>result.state==="OFFLINE");
+
+    if(allOffline){
+      const offline=successful[0];
+      lastGoodStatus=null;
       setStatus("OFFLINE",null,null,offline.checkedAt,offline.source);
       return;
     }
 
-    throw new Error("No fresh verified observation");
+    if(lastGoodStatus && lastGoodStatus.validUntil && Date.now()<lastGoodStatus.validUntil){
+      setStatus(
+        lastGoodStatus.state,
+        lastGoodStatus.players,
+        lastGoodStatus.max,
+        lastGoodStatus.checkedAt,
+        "MinecraftStatus.com • last valid observation"
+      );
+      return;
+    }
+
+    throw new Error("No fresh observation");
   }catch(error){
-    $("statusText").textContent="UNKNOWN";
-    $("statusIcon").textContent="?";
-    $("statusIcon").style.color="#f59e0b";
-    $("players").textContent="— / —";
-    $("heroPlayers").textContent="—";
-    $("heroStatus").textContent="UNKNOWN";
-    $("visualStatus").textContent=error?.name==="AbortError"
-      ?"Status request timed out"
-      :"Live status unavailable";
-    $("visualPlayers").textContent=error?.message==="Status service rate limited"
-      ?"Status service rate limited"
-      :"No fresh verified data";
-    $("statusMeta").textContent=manual
-      ?"Refresh failed — try again"
-      :"Waiting for a fresh status observation";
+    if(lastGoodStatus && lastGoodStatus.validUntil && Date.now()<lastGoodStatus.validUntil){
+      setStatus(
+        lastGoodStatus.state,
+        lastGoodStatus.players,
+        lastGoodStatus.max,
+        lastGoodStatus.checkedAt,
+        "MinecraftStatus.com • last valid observation"
+      );
+    }else{
+      $("statusText").textContent="UNKNOWN";
+      $("statusIcon").textContent="?";
+      $("statusIcon").style.color="#f59e0b";
+      $("players").textContent="— / —";
+      $("heroPlayers").textContent="—";
+      $("heroStatus").textContent="UNKNOWN";
+      $("visualStatus").textContent=error?.name==="AbortError"
+        ?"Status request timed out"
+        :"Live status unavailable";
+      $("visualPlayers").textContent=String(error?.message||"No fresh verified data").replace(/^RATE_LIMITED/,"Status service rate limited");
+      $("statusMeta").textContent=manual
+        ?"Refresh failed — no fresh result"
+        :"Waiting for a fresh status observation";
+    }
   }finally{
     clearTimeout(timeout);
     statusRequestRunning=false;
+
     if(refresh){
       refresh.disabled=false;
       refresh.classList.remove("spinning");
     }
   }
 }
+
 
 function getBotKey(){
   let key=sessionStorage.getItem("strengthBotKey");

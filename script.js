@@ -1,8 +1,8 @@
 const IP="s1strength.mcsh.io";
 
 const STATUS_APIS=[
-  "https://minecraftstatus.com/api/v1/status/java?address="+encodeURIComponent(IP),
-  "https://minecraftstatus.com/api/v1/status/java?address="+encodeURIComponent("144.31.46.15:12565")
+  "https://minecraftstatus.com/api/status/java/"+encodeURIComponent(IP),
+  "https://minecraftstatus.com/api/status/java/"+encodeURIComponent("144.31.46.15:12565")
 ];
 
 const $=id=>document.getElementById(id);
@@ -58,22 +58,6 @@ async function getExternalStatus(url,signal){
 
   // MinecraftStatus may return 202 while a bounded observation is being
   // completed. Follow the returned poll URL instead of calling it a failure.
-  if(response.status===202 && data.pollUrl){
-    const pollResponse=await fetch(data.pollUrl,{
-      cache:"no-store",
-      signal,
-      headers:{Accept:"application/json"}
-    });
-
-    const pollData=await pollResponse.json().catch(()=>({}));
-
-    if(!pollResponse.ok){
-      throw new Error("Status poll returned "+pollResponse.status);
-    }
-
-    return normalizeStatusObservation(pollData);
-  }
-
   if(!response.ok){
     throw new Error("Status service returned "+response.status);
   }

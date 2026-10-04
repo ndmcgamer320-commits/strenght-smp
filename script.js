@@ -51,25 +51,46 @@ async function getExternalStatus(url,signal){
   });
 
   if(response.status===429){
-    const retryAfter=response.headers.get("Retry-After");
-    throw new Error("RATE_LIMITED"+(retryAfter?":"+retryAfter:""));
+    throw new Error("RATE_LIMITED");
+  }
+
+  const data=await response.json().catch(()=>({}));
+
+  // MinecraftStatus may return 202 while a bounded observation is being
+  // completed. Follow the returned poll URL instead of calling it a failure.
+  if(response.status===202 && data.pollUrl){
+    const pollResponse=await fetch(data.pollUrl,{
+      cache:"no-store",
+      signal,
+      headers:{Accept:"application/json"}
+    });
+
+    const pollData=await pollResponse.json().catch(()=>({}));
+
+    if(!pollResponse.ok){
+      throw new Error("Status poll returned "+pollResponse.status);
+    }
+
+    return normalizeStatusObservation(pollData);
   }
 
   if(!response.ok){
     throw new Error("Status service returned "+response.status);
   }
 
-  const data=await response.json();
+  return normalizeStatusObservation(data);
+}
 
+function normalizeStatusObservation(data){
   const observedAt=Date.parse(data.observedAt||"");
   const validUntil=Date.parse(data.validUntil||"");
 
-  if(validUntil && Date.now()>validUntil){
-    throw new Error("Observation expired");
-  }
-
   if(data.freshness && data.freshness!=="fresh"){
     throw new Error("Observation not fresh");
+  }
+
+  if(validUntil && Date.now()>validUntil){
+    throw new Error("Observation expired");
   }
 
   const state=
@@ -88,6 +109,7 @@ async function getExternalStatus(url,signal){
     source:"MinecraftStatus.com"
   };
 }
+
 
 async function updateServer(manual=false){
   if(statusRequestRunning) return;

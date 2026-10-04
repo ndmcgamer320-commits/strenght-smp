@@ -8,13 +8,12 @@
     "start": "node index.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=18"
   },
   "dependencies": {
     "express": "^5.1.0",
     "mineflayer": "^4.39.0",
     "minecraft-protocol": "1.68.0",
-    "prismarine-nbt": "2.8.0",
-    "dotenv": "^17.2.2"
+    "prismarine-nbt": "2.8.0"
   }
 }

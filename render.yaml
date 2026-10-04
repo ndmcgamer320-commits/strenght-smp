@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: strength-smp-bot
+    runtime: node
+    rootDir: bot
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_HOST
+        value: s1strength.mcsh.io
+      - key: BOT_PORT
+        value: "12565"
+      - key: BOT_USERNAME
+        sync: false
+      - key: BOT_AUTH
+        value: offline
+      - key: BOT_REGISTER_PASSWORD
+        sync: false
+      - key: BOT_REGISTER_COMMAND
+        value: /register __BOT_REGISTER_PASSWORD__ __BOT_REGISTER_PASSWORD__
+      - key: BOT_LOGIN_COMMAND
+        value: /login __BOT_REGISTER_PASSWORD__
+      - key: BOT_API_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://ndmcgamer320-commits.github.io
+      - key: ALLOWED_COMMANDS
+        value: list,time,weather,say,help
+      - key: AUTO_CONNECT
+        value: "true"

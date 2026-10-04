@@ -192,7 +192,8 @@ try{
   console.log(JSON.stringify(status));
 }catch(error){
   const status={
-    online:false,
+    online:null,
+    state:"UNKNOWN",
     players:null,
     max:null,
     version:null,

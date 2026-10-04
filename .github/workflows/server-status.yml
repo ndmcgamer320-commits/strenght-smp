@@ -24,7 +24,7 @@ jobs:
 
       - name: Direct Minecraft status check
         env:
-          STATUS_HOST: strenght.mcsh.oi
+          STATUS_HOST: strength.mcsh.oi
         run: node status-check.mjs
 
       - name: Publish status branch

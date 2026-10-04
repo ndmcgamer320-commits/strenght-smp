@@ -1,5 +1,5 @@
 const IP="s1strength.mcsh.io";
-const STATUS_URL="https://api.github.com/repos/ndmcgamer320-commits/strenght-smp/contents/status.json?ref=status-data";
+const STATUS_URL="https://raw.githubusercontent.com/ndmcgamer320-commits/strenght-smp/status-data/status.json";
 const STALE_AFTER=12*60*1000;
 
 // Set BOT_API_URL to your deployed bot service URL.
@@ -220,7 +220,7 @@ $("botCommand")?.addEventListener("keydown",event=>{
 });
 
 updateServer();
-setInterval(updateServer,15000);
+setInterval(()=>updateServer(false),30000);
 refreshBot();
 setInterval(refreshBot,15000);
 

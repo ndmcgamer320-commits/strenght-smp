@@ -1,5 +1,6 @@
 const mineflayer = require("mineflayer");
 const express = require("express");
+const nbt = require("prismarine-nbt");
 
 const HOST = process.env.BOT_HOST || "s1strength.mcsh.io";
 const PORT = Number(process.env.BOT_PORT || 12565);
@@ -10,9 +11,14 @@ const HTTP_PORT = Number(process.env.PORT || 3000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "https://ndmcgamer320-commits.github.io";
 const AUTO_CONNECT = (process.env.AUTO_CONNECT || "true").toLowerCase() !== "false";
 
-const REGISTER_PASSWORD = process.env.BOT_REGISTER_PASSWORD || "";
-const REGISTER_COMMAND = process.env.BOT_REGISTER_COMMAND || "";
-const LOGIN_COMMAND = process.env.BOT_LOGIN_COMMAND || "";
+const PREJOIN_PASSWORD = process.env.PREJOIN_PASSWORD || "";
+const PREJOIN_EMAIL = process.env.PREJOIN_EMAIL || "";
+const PREJOIN_REGISTER = (process.env.PREJOIN_REGISTER || "true").toLowerCase() === "true";
+const PREJOIN_REGISTER_ACTION = process.env.PREJOIN_REGISTER_ACTION || "nlogin:register/yes";
+const PREJOIN_LOGIN_ACTION = process.env.PREJOIN_LOGIN_ACTION || "nlogin:login/yes";
+const PREJOIN_PASSWORD_FIELD = process.env.PREJOIN_PASSWORD_FIELD || "password";
+const PREJOIN_CONFIRM_FIELD = process.env.PREJOIN_CONFIRM_FIELD || "confirm_password";
+const PREJOIN_EMAIL_FIELD = process.env.PREJOIN_EMAIL_FIELD || "email";
 
 const ALLOWED_COMMANDS = new Set(
   (process.env.ALLOWED_COMMANDS || "list,time,weather,say,help")
@@ -27,16 +33,11 @@ let lastError = "";
 let lastEvent = "Starting bot service";
 let reconnectTimer = null;
 let reconnectDelay = 5000;
+let authStage = "waiting";
 
 function logEvent(message) {
   lastEvent = message;
   console.log(new Date().toISOString(), message);
-}
-
-function renderCommand(command) {
-  return String(command || "")
-    .replaceAll("__BOT_REGISTER_PASSWORD__", REGISTER_PASSWORD)
-    .trim();
 }
 
 function prepareCommand(command) {
@@ -55,12 +56,118 @@ function prepareCommand(command) {
   return "/" + value;
 }
 
-function sendStartupCommand(command) {
-  const rendered = renderCommand(command);
-  if (!bot || !rendered) return;
+function findStrings(value, output = []) {
+  if (typeof value === "string") {
+    output.push(value);
+    return output;
+  }
 
-  logEvent("Startup: " + rendered.split(" ")[0]);
-  bot.chat(rendered);
+  if (Array.isArray(value)) {
+    for (const item of value) findStrings(item, output);
+    return output;
+  }
+
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      output.push(String(key));
+      findStrings(item, output);
+    }
+  }
+
+  return output;
+}
+
+function collectActionIds(value, output = []) {
+  if (!value || typeof value !== "object") return output;
+
+  if (typeof value.id === "string") output.push(value.id);
+  if (typeof value.action === "string") output.push(value.action);
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectActionIds(item, output);
+  } else {
+    for (const item of Object.values(value)) collectActionIds(item, output);
+  }
+
+  return output;
+}
+
+function actionPayload(fields) {
+  const payload = {};
+
+  if (PREJOIN_PASSWORD) {
+    payload[PREJOIN_PASSWORD_FIELD] = PREJOIN_PASSWORD;
+    payload[PREJOIN_CONFIRM_FIELD] = PREJOIN_PASSWORD;
+  }
+
+  if (PREJOIN_EMAIL && PREJOIN_EMAIL_FIELD) {
+    payload[PREJOIN_EMAIL_FIELD] = PREJOIN_EMAIL;
+  }
+
+  return payload;
+}
+
+function sendCustomClick(actionId, fields = {}) {
+  if (!bot || !bot._client) throw new Error("Bot client is not connected");
+
+  const payload = actionPayload(fields);
+  const tag = nbt.comp(
+    Object.fromEntries(
+      Object.entries(payload).map(([key, value]) => [key, nbt.string(String(value))])
+    )
+  );
+
+  bot._client.write("custom_click_action", {
+    id: actionId,
+    nbt: tag
+  });
+
+  logEvent("GUI action sent: " + actionId);
+}
+
+function handlePreJoinDialog(data) {
+  const dialog = data && data.dialog ? data.dialog : data;
+  const strings = findStrings(dialog).join(" ").toLowerCase();
+  const ids = [...new Set(collectActionIds(dialog))];
+
+  const registerLike = strings.includes("register") || strings.includes("registr");
+  const loginLike = strings.includes("login") || strings.includes("log in");
+
+  const matchingRegister = ids.find(id =>
+    /register/i.test(id) && /(yes|submit|confirm|accept)/i.test(id)
+  );
+  const matchingLogin = ids.find(id =>
+    /login/i.test(id) && /(yes|submit|confirm|accept)/i.test(id)
+  );
+
+  logEvent(
+    "Pre-join dialog received: " +
+    (registerLike ? "REGISTER" : loginLike ? "LOGIN" : "UNKNOWN") +
+    " | actions=" + (ids.slice(0, 8).join(",") || "none")
+  );
+
+  if (!PREJOIN_PASSWORD) {
+    lastError = "PREJOIN_PASSWORD is not configured";
+    authStage = "needs-password";
+    return;
+  }
+
+  const actionId =
+    registerLike && PREJOIN_REGISTER
+      ? (matchingRegister || PREJOIN_REGISTER_ACTION)
+      : (matchingLogin || PREJOIN_LOGIN_ACTION);
+
+  authStage = registerLike && PREJOIN_REGISTER ? "registering" : "logging-in";
+
+  // The custom_click_action payload is an optional length-prefixed NBT compound.
+  // Current minecraft-protocol supports the 1.21.11 packet definitions.
+  try {
+    sendCustomClick(actionId);
+    logEvent("Submitted pre-join " + authStage + " GUI");
+  } catch (error) {
+    lastError = error && error.message ? error.message : String(error);
+    logEvent("Pre-join GUI error: " + lastError);
+  }
 }
 
 function scheduleReconnect() {
@@ -68,6 +175,7 @@ function scheduleReconnect() {
 
   const delay = reconnectDelay;
   logEvent("Reconnecting in " + Math.round(delay / 1000) + "s");
+
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
@@ -87,9 +195,10 @@ function connect() {
   }
 
   reconnectDelay = 5000;
-
+  authStage = "connecting";
   connecting = true;
   lastError = "";
+
   logEvent("Connecting to " + HOST + ":" + PORT);
 
   bot = mineflayer.createBot({
@@ -102,19 +211,24 @@ function connect() {
     checkTimeoutInterval: 30000
   });
 
+  // The register/login dialog may arrive in the CONFIGURATION state,
+  // before the normal player spawn event.
+  bot._client.on("packet", (data, meta) => {
+    if (meta && meta.name === "show_dialog") {
+      handlePreJoinDialog(data);
+    }
+  });
+
   bot.once("login", () => {
-    logEvent("Bot logged in");
+    authStage = "logged-in";
+    logEvent("Bot login phase complete");
   });
 
   bot.once("spawn", () => {
     connecting = false;
     reconnectDelay = 5000;
-    logEvent("Bot spawned");
-
-    setTimeout(() => {
-      sendStartupCommand(REGISTER_COMMAND);
-      setTimeout(() => sendStartupCommand(LOGIN_COMMAND), 3000);
-    }, 1500);
+    authStage = "spawned";
+    logEvent("Bot spawned successfully");
   });
 
   bot.on("messagestr", message => {
@@ -148,6 +262,11 @@ function connect() {
 }
 
 function disconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   if (bot) {
     logEvent("Disconnect requested");
     bot.quit("Website requested disconnect");
@@ -155,6 +274,7 @@ function disconnect() {
   }
 
   connecting = false;
+  authStage = "disconnected";
   return { connected: false, connecting: false };
 }
 
@@ -190,6 +310,7 @@ app.get("/state", requireKey, (req, res) => {
   res.json({
     connected: Boolean(bot),
     connecting,
+    authStage,
     username: bot && bot.username ? bot.username : USERNAME,
     host: HOST,
     port: PORT,

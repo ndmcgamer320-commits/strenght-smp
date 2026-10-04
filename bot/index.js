@@ -1,4 +1,3 @@
-require("dotenv").config();
 const mineflayer = require("mineflayer");
 const express = require("express");
 const nbt = require("prismarine-nbt");

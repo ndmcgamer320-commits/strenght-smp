@@ -46,8 +46,8 @@ function prepareCommand(command) {
   if (!value) throw new Error("Command is empty");
   if (value.length > 120) throw new Error("Command is too long");
 
-  value = value.replace(/^\/+/, "");
-  const name = value.split(/\s+/)[0].toLowerCase();
+  value = value.replace(/^\/++/, "");
+  const name = value.split(/\\s+/)[0].toLowerCase();
 
   if (!ALLOWED_COMMANDS.has(name)) {
     throw new Error("Command not allowed: /" + name);
@@ -92,7 +92,60 @@ function collectActionIds(value, output = []) {
   return output;
 }
 
-function actionPayload(fields) {
+function encodeVarInt(value) {
+  const bytes = [];
+  let current = Number(value) >>> 0;
+
+  do {
+    let temp = current & 0x7f;
+    current >>>= 7;
+    if (current !== 0) temp |= 0x80;
+    bytes.push(temp);
+  } while (current !== 0);
+
+  return Buffer.from(bytes);
+}
+
+function encodeString(text) {
+  const value = Buffer.from(String(text), "utf8");
+  return Buffer.concat([encodeVarInt(value.length), value]);
+}
+
+// Minecraft 1.21.6+ custom_click_action uses an anonymous NBT compound.
+// For this packet, the root compound has no name: TAG_Compound followed by
+// its child tags and TAG_End. Strings are TAG_String (0x08).
+function buildAnonymousNbtCompound(fields) {
+  const parts = [Buffer.from([0x0a])];
+
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === "") continue;
+
+    const keyBytes = Buffer.from(String(key), "utf8");
+    const valueBytes = Buffer.from(String(value), "utf8");
+
+    if (keyBytes.length > 0xffff || valueBytes.length > 0xffff) {
+      throw new Error("Pre-join GUI field is too large");
+    }
+
+    const header = Buffer.alloc(1 + 2 + keyBytes.length + 2);
+    let offset = 0;
+
+    header.writeUInt8(0x08, offset++);
+    header.writeUInt16BE(keyBytes.length, offset);
+    offset += 2;
+    keyBytes.copy(header, offset);
+    offset += keyBytes.length;
+    header.writeUInt16BE(valueBytes.length, offset);
+
+    parts.push(header, valueBytes);
+  }
+
+  parts.push(Buffer.from([0x00]));
+
+  return Buffer.concat(parts);
+}
+
+function actionPayload() {
   const payload = {};
 
   if (PREJOIN_PASSWORD) {
@@ -107,22 +160,28 @@ function actionPayload(fields) {
   return payload;
 }
 
-function sendCustomClick(actionId, fields = {}) {
+function sendCustomClick(actionId) {
   if (!bot || !bot._client) throw new Error("Bot client is not connected");
 
-  const payload = actionPayload(fields);
-  const tag = nbt.comp(
-    Object.fromEntries(
-      Object.entries(payload).map(([key, value]) => [key, nbt.string(String(value))])
-    )
+  const payload = actionPayload();
+  const nbtBuffer = buildAnonymousNbtCompound(payload);
+
+  // Work around the current minecraft-protocol NBT-length encoding problem
+  // for custom_click_action. The upstream workaround sends the packet body
+  // directly with the correct NBT byte length.
+  const rawBuffer = Buffer.concat([
+    encodeVarInt(0x08),             // custom_click_action packet ID in 1.21.x
+    encodeString(actionId),         // custom click action identifier
+    encodeVarInt(nbtBuffer.length), // exact anonymous NBT byte length
+    nbtBuffer
+  ]);
+
+  bot._client.writeRaw(rawBuffer);
+
+  logEvent(
+    "GUI action sent: " + actionId +
+    " | fields=" + Object.keys(payload).join(",")
   );
-
-  bot._client.write("custom_click_action", {
-    id: actionId,
-    nbt: tag
-  });
-
-  logEvent("GUI action sent: " + actionId);
 }
 
 function handlePreJoinDialog(data) {

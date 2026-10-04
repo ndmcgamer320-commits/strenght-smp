@@ -1,5 +1,5 @@
 const IP="s1strength.mcsh.io";
-const STATUS_URL="https://raw.githubusercontent.com/ndmcgamer320-commits/strenght-smp/status-data/status.json";
+const STATUS_URL="https://api.github.com/repos/ndmcgamer320-commits/strenght-smp/contents/status.json?ref=status-data";
 const STALE_AFTER=12*60*1000;
 
 const $=id=>document.getElementById(id);
@@ -44,7 +44,13 @@ async function updateServer(){
 
     if(!response.ok) throw new Error("Status file unavailable");
 
-    const data=await response.json();
+    const wrapper=await response.json();
+
+    if(!wrapper.content) throw new Error("No status content received");
+
+    const normalized=wrapper.content.replace(/\s/g,"");
+    const data=JSON.parse(atob(normalized));
+
     const checkedAt=Date.parse(data.checkedAt || "");
 
     // Never display old OFFLINE data as current.

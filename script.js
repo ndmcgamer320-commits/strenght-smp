@@ -52,19 +52,23 @@ async function updateServer(manual=false){
   }
 
   setStatus("CHECKING",null,null);
+  $("statusMeta").textContent=manual
+    ?"Checking live server..."
+    :"Checking live server...";
+
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),8000);
 
   try{
-    const response=await fetch(STATUS_URL+"&t="+Date.now(),{
+    const response=await fetch(STATUS_URL+"?t="+Date.now(),{
       cache:"no-store",
-      headers:{Accept:"application/json"}
+      signal:controller.signal
     });
 
     if(!response.ok) throw new Error("Status file unavailable");
 
-    const wrapper=await response.json();
-    if(!wrapper.content) throw new Error("No status content received");
-
-    const data=JSON.parse(atob(wrapper.content.replace(/\\s/g,"")));
+    // status-data/status.json is raw JSON, not a GitHub Contents API wrapper.
+    const data=await response.json();
     const checkedAt=Date.parse(data.checkedAt||"");
 
     if(!checkedAt||Date.now()-checkedAt>STALE_AFTER){
@@ -72,8 +76,13 @@ async function updateServer(manual=false){
     }
 
     if(data.online===true){
-      setStatus("ONLINE",data.players?.online??data.players,data.players?.max??data.max,data.checkedAt);
-    }else if(data.online===false&&data.state!=="UNKNOWN"){
+      setStatus(
+        "ONLINE",
+        data.players?.online ?? data.players,
+        data.players?.max ?? data.max,
+        data.checkedAt
+      );
+    }else if(data.online===false){
       setStatus("OFFLINE",null,null,data.checkedAt);
     }else{
       setStatus("UNKNOWN",null,null,data.checkedAt);
@@ -86,11 +95,14 @@ async function updateServer(manual=false){
     $("heroPlayers").textContent="—";
     $("heroStatus").textContent="UNKNOWN";
     $("visualStatus").textContent="Live status unavailable";
-    $("visualPlayers").textContent="No fresh status data";
+    $("visualPlayers").textContent=error?.name==="AbortError"
+      ?"Status request timed out"
+      :"No fresh status data";
     $("statusMeta").textContent=manual
-      ?"Refresh failed — no fresh status received"
-      :"Waiting for a fresh server check";
+      ?"Refresh failed — try again"
+      :"Status check unavailable";
   }finally{
+    clearTimeout(timeout);
     if(refresh){
       refresh.disabled=false;
       refresh.classList.remove("spinning");

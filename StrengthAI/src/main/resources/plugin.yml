@@ -1,0 +1,20 @@
+name: StrengthAI
+version: '${version}'
+main: me.strengthai.StrengthAIPlugin
+api-version: '1.21.11'
+author: ndmcgamer320
+website: https://ndmcgamer320-commits.github.io/strenght-smp/
+description: AI-powered anti-cheat, moderation, strength management and website API.
+commands:
+  strengthai:
+    description: StrengthAI admin and anti-cheat controls
+    aliases: [sai, ai, api, anticheat]
+    usage: /strengthai <subcommand>
+    permission: strengthai.admin
+permissions:
+  strengthai.admin:
+    description: Full StrengthAI administration
+    default: op
+  strengthai.notify:
+    description: Receive StrengthAI detection notifications
+    default: op

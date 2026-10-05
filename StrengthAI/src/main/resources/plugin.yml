@@ -8,7 +8,7 @@ description: AI-powered anti-cheat, moderation, strength management and website 
 commands:
   strengthai:
     description: StrengthAI admin and anti-cheat controls
-    aliases: [sai, ai, api, anticheat]
+    aliases: [strenthai, strenghtai, sai, ai, api, anticheat]
     usage: /strengthai <subcommand>
     permission: strengthai.admin
 permissions:

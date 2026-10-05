@@ -7,6 +7,7 @@ ai:
   title: "Strength SMP AI"
   timeout-seconds: 25
   cooldown-seconds: 20
+  join-review: true
   review-score: 35
   reset-confidence: 0.85
   punish-confidence: 0.93
@@ -23,6 +24,13 @@ web:
 anti-cheat:
   enabled: true
   auto-actions: true
+  movement: true
+  combat: true
+  reach: true
+  mining: true
+  spam: true
+  bot: true
+  automation: true
   notify-admins: true
   spam-window-ms: 6000
   spam-max-messages: 6

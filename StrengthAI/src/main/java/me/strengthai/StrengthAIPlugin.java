@@ -350,6 +350,18 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
     }
 
     @EventHandler
+    public void onTeleport(PlayerTeleportEvent event) {
+        if (event.getTo() != null) {
+            antiCheat.recordTeleport(event.getPlayer());
+        }
+    }
+
+    @EventHandler
+    public void onVelocity(PlayerVelocityEvent event) {
+        antiCheat.recordVelocity(event.getPlayer());
+    }
+
+    @EventHandler
     public void onTotem(EntityResurrectEvent event) {
         if (event.getEntity() instanceof Player player) {
             String hand = event.getHand() == null ? "UNKNOWN" : event.getHand().name();

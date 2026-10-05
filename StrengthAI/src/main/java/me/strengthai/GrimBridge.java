@@ -32,7 +32,7 @@ public final class GrimBridge {
                     (user, check, verbose, cancelled) -> {
                         Player player = Bukkit.getPlayer(user.getUniqueId());
                         if (player != null) {
-                            String checkName = check.getCheckName();
+                            String checkName = check == null ? "UNKNOWN" : check.getCheckName();
                             String detail = verbose == null ? "" : verbose.toString();
 
                             Bukkit.getScheduler().runTask(
@@ -46,10 +46,12 @@ public final class GrimBridge {
                         }
 
                         return cancelled;
-                    }
+                    },
+                    Integer.MAX_VALUE,
+                    true
             );
 
-            plugin.getLogger().info("GrimAC integration enabled.");
+            plugin.getLogger().info("GrimAC integration enabled: FlagEvent observer registered at MONITOR/always.");
             return true;
         } catch (Throwable error) {
             plugin.getLogger().warning("GrimAC integration unavailable: " + error.getClass().getSimpleName());

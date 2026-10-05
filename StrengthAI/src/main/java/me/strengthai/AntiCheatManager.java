@@ -403,6 +403,16 @@ public final class AntiCheatManager {
         }
     }
 
+    public void recordTeleport(Player player) {
+        profile(player.getUniqueId()).recentTeleportUntil =
+                System.currentTimeMillis() + 2500L;
+    }
+
+    public void recordVelocity(Player player) {
+        profile(player.getUniqueId()).recentVelocityUntil =
+                System.currentTimeMillis() + 1800L;
+    }
+
     public void recordGrimFlag(Player player, String checkName, String verbose) {
         Profile p = profile(player.getUniqueId());
         String name = checkName == null ? "UNKNOWN" : checkName.toUpperCase(Locale.ROOT);

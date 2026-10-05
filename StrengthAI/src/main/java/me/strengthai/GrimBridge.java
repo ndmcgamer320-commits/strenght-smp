@@ -60,4 +60,15 @@ public final class GrimBridge {
     public boolean installed() {
         return grimPlugin != null;
     }
+
+    public void disable() {
+        if (grimPlugin == null) return;
+
+        try {
+            GrimAPIProvider.get().getEventBus().unregisterAllListeners(grimPlugin);
+        } catch (Throwable ignored) {
+        }
+
+        grimPlugin = null;
+    }
 }

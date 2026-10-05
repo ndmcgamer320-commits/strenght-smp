@@ -8,8 +8,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityResurrectEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -22,6 +25,7 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
     private OpenRouterService ai;
     private AntiCheatManager antiCheat;
     private WebApi web;
+    private GrimBridge grimBridge;
     private BukkitTask periodicTask;
     private final Deque<String> recentEvents = new ConcurrentLinkedDeque<>();
     private final AtomicLong lastAIRequest = new AtomicLong(0);
@@ -45,6 +49,8 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
 
         ai = new OpenRouterService(this);
         antiCheat = new AntiCheatManager(this);
+        grimBridge = new GrimBridge(this);
+        grimBridge.enable();
         web = new WebApi(this);
 
         getServer().getPluginManager().registerEvents(this, this);
@@ -80,6 +86,7 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
     public void onDisable() {
         if (periodicTask != null) periodicTask.cancel();
         if (web != null) web.close();
+        if (grimBridge != null) grimBridge.disable();
         if (ai != null) ai.close();
         if (dataStore != null) dataStore.save();
     }
@@ -133,14 +140,11 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
                 antiCheat.profile(player.getUniqueId()).aiPending.set(false);
                 return;
             }
-        }
 
-        if (!lastAIRequest.compareAndSet(
-                "PLAYER_JOIN".equals(event) ? lastAIRequest.get() : lastAIRequest.get(),
-                now
-        ) && !"PLAYER_JOIN".equals(event)) {
-            antiCheat.profile(player.getUniqueId()).aiPending.set(false);
-            return;
+            if (!lastAIRequest.compareAndSet(previous, now)) {
+                antiCheat.profile(player.getUniqueId()).aiPending.set(false);
+                return;
+            }
         }
 
         addEvent("AI review queued: " + player.getName() + " | " + event);
@@ -337,6 +341,26 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
         Player killer = event.getEntity().getKiller();
         if (killer != null) {
             antiCheat.death(event.getEntity(), killer);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onBlockPlace(BlockPlaceEvent event) {
+        antiCheat.recordBlockPlace(event.getPlayer(), event.getBlock());
+    }
+
+    @EventHandler
+    public void onTotem(EntityResurrectEvent event) {
+        if (event.getEntity() instanceof Player player) {
+            String hand = event.getHand() == null ? "UNKNOWN" : event.getHand().name();
+            antiCheat.recordTotem(player, event.isCancelled(), hand);
+        }
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player player) {
+            antiCheat.recordInventoryAction(player);
         }
     }
 
@@ -611,6 +635,57 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
                 sender.sendMessage(prefix() + "&aDebug logging " + (enabled ? "enabled" : "disabled") + ".");
             }
 
+            case "banreview" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai banreview <player>");
+                    return true;
+                }
+
+                Player player = Bukkit.getPlayerExact(args[1]);
+                if (player == null) {
+                    sender.sendMessage(prefix() + "&cPlayer not online.");
+                    return true;
+                }
+
+                sender.sendMessage(prefix() + "&bBAN REVIEW for &f" + player.getName());
+                sender.sendMessage(prefix() + "&7" + antiCheat.banReview(player));
+                sender.sendMessage(prefix() + "&7Automatic ban eligible now: &f" +
+                        (antiCheat.currentBanEligible(player) ? "YES" : "NO"));
+            }
+
+            case "clearflags" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai clearflags <player>");
+                    return true;
+                }
+
+                Player player = Bukkit.getPlayerExact(args[1]);
+                if (player == null) {
+                    sender.sendMessage(prefix() + "&cPlayer not online.");
+                    return true;
+                }
+
+                antiCheat.clearFlags(player);
+                sender.sendMessage(prefix() + "&aCleared StrengthAI evidence for &f" + player.getName());
+            }
+
+            case "pardon" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai pardon <player>");
+                    return true;
+                }
+
+                Bukkit.dispatchCommand(
+                        Bukkit.getConsoleSender(),
+                        "pardon " + args[1]
+                );
+
+                sender.sendMessage(prefix() + "&aPardoned &f" + args[1]);
+            }
+
+            case "tps" -> sender.sendMessage(prefix() + "&bTPS: &f" +
+                    String.format(Locale.US, "%.2f", Bukkit.getTPS()[0]));
+
             default -> sender.sendMessage(prefix() + "&cUnknown command. Use /strenthai admin");
         }
 
@@ -786,6 +861,10 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
         sender.sendMessage(prefix() + "&f/strenthai scanall &7- scan all online players");
         sender.sendMessage(prefix() + "&f/strenthai player <player> &7- player evidence");
         sender.sendMessage(prefix() + "&f/strenthai report <player> <reason> &7- send evidence to AI");
+        sender.sendMessage(prefix() + "&f/strenthai scanall &7- scan everyone");
+        sender.sendMessage(prefix() + "&f/strenthai banreview <player> &7- fair-ban safety decision");
+        sender.sendMessage(prefix() + "&f/strenthai clearflags <player> &7- clear local evidence");
+        sender.sendMessage(prefix() + "&f/strenthai pardon <player> &7- remove a ban");
         sender.sendMessage(prefix() + "&f/strenthai config get|set|save <path> [value]");
         sender.sendMessage(prefix() + "&f/strenthai detectors &7- detector status");
         sender.sendMessage(prefix() + "&f/strenthai detectors <name> on|off");
@@ -820,6 +899,10 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
                     "stats",
                     "player",
                     "report",
+                    "banreview",
+                    "clearflags",
+                    "pardon",
+                    "tps",
                     "reset",
                     "punish",
                     "trust",

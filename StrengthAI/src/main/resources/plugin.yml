@@ -5,6 +5,7 @@ api-version: '1.21.11'
 author: ndmcgamer320
 website: https://ndmcgamer320-commits.github.io/strenght-smp/
 description: AI-powered anti-cheat, moderation, strength management and website API.
+softdepend: [GrimAC]
 commands:
   strengthai:
     description: StrengthAI admin and anti-cheat controls

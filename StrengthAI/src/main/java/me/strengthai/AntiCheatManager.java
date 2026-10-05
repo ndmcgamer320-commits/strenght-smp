@@ -234,20 +234,143 @@ public final class AntiCheatManager {
         }
 
         boolean auto = plugin.getConfig().getBoolean("anti-cheat.auto-actions", true);
-        double banConfidence = plugin.getConfig().getDouble("ai.punish-confidence", 0.93);
-        int banScore = plugin.getConfig().getInt("ai.ban-score", 90);
+        boolean autoBan = plugin.getConfig().getBoolean("fair-bans.auto-ban", true);
 
-        if (auto && p.score >= banScore &&
-                result.confidence() >= banConfidence &&
-                result.actions().contains("BAN")) {
+        // Never punish an offline player from a late AI response.
+        if (!player.isOnline()) return;
+
+        if (autoBan &&
+                result.actions().contains("BAN") &&
+                banEligible(player, result)) {
             plugin.executePunishment(player, "ban", result.category());
-        } else if (auto && result.actions().contains("KICK") &&
-                result.confidence() >= 0.97) {
+            p.score = 0;
+            return;
+        }
+
+        if (auto && result.actions().contains("KICK") &&
+                result.confidence() >= plugin.getConfig().getDouble("fair-bans.kick-confidence", 0.99) &&
+                p.score >= plugin.getConfig().getInt("fair-bans.kick-score", 70)) {
             plugin.executePunishment(player, "kick", result.category());
         } else if (auto && result.actions().contains("MUTE") &&
-                result.confidence() >= 0.90) {
+                result.confidence() >= 0.95 &&
+                p.spamScore >= 25) {
             plugin.executePunishment(player, "mute", result.category());
         }
+    }
+
+    public void recordGrimFlag(Player player, String checkName, String verbose) {
+        Profile p = profile(player.getUniqueId());
+        String name = checkName == null ? "UNKNOWN" : checkName.toUpperCase(Locale.ROOT);
+        p.grimFlags++;
+        p.grimChecks.merge(name, 1, Integer::sum);
+        p.score += 3;
+        p.lastGrimCheck = name;
+        p.lastGrimVerbose = verbose == null ? "" : verbose.substring(0, Math.min(300, verbose.length()));
+        p.events.addFirst("GRIM:" + name);
+        while (p.events.size() > 30) p.events.removeLast();
+
+        if (p.grimFlags % 5 == 0 && p.aiPending.compareAndSet(false, true)) {
+            plugin.queueAI(player, "GRIM_REVIEW", evidence(player));
+        }
+    }
+
+    public void recordTotem(Player player, boolean cancelled, String hand) {
+        Profile p = profile(player.getUniqueId());
+        if (cancelled) return;
+        long now = System.currentTimeMillis();
+        p.totemPops++;
+        p.totemTimes.addLast(now);
+        prune(p.totemTimes, now - 15000);
+        p.lastTotemHand = hand == null ? "UNKNOWN" : hand;
+        p.events.addFirst("TOTEM:" + p.lastTotemHand);
+        while (p.events.size() > 30) p.events.removeLast();
+
+        // Totems are normal gameplay telemetry, never a ban trigger by themselves.
+        if (p.totemTimes.size() >= 3 && p.aiPending.compareAndSet(false, true)) {
+            plugin.queueAI(player, "TOTEM_REVIEW", evidence(player));
+        }
+    }
+
+    public void recordBlockPlace(Player player, Block block) {
+        Profile p = profile(player.getUniqueId());
+        p.blocksPlaced++;
+        long now = System.currentTimeMillis();
+        p.placeTimes.addLast(now);
+        prune(p.placeTimes, now - 1500);
+
+        if (p.placeTimes.size() >= 10) {
+            p.scaffoldBursts++;
+            p.score += 2;
+        }
+    }
+
+    public void recordInventoryAction(Player player) {
+        Profile p = profile(player.getUniqueId());
+        long now = System.currentTimeMillis();
+        p.inventoryTimes.addLast(now);
+        prune(p.inventoryTimes, now - 1000);
+
+        if (p.inventoryTimes.size() >= 18) {
+            p.inventoryBursts++;
+            p.score += 2;
+        }
+    }
+
+    public boolean banEligible(Player player, OpenRouterService.AIResult result) {
+        Profile p = profile(player.getUniqueId());
+
+        if (!player.isOnline()) return false;
+        if (isTrusted(player)) return false;
+
+        long grace = plugin.getConfig().getLong("fair-bans.join-grace-seconds", 60L) * 1000L;
+        if (System.currentTimeMillis() - p.lastJoin < grace) return false;
+
+        if (p.recentTeleportUntil > System.currentTimeMillis() ||
+                p.recentVelocityUntil > System.currentTimeMillis()) {
+            return false;
+        }
+
+        double tps = Bukkit.getTPS()[0];
+        if (tps > 0 && tps < plugin.getConfig().getDouble("fair-bans.min-tps", 18.0)) {
+            return false;
+        }
+
+        if (!"CHEAT".equalsIgnoreCase(result.verdict())) return false;
+
+        double minConfidence = plugin.getConfig().getDouble("fair-bans.min-ai-confidence", 0.98);
+        int minScore = plugin.getConfig().getInt("fair-bans.min-score", 120);
+        int minSignals = plugin.getConfig().getInt("fair-bans.min-independent-signals", 2);
+
+        if (result.confidence() < minConfidence || p.score < minScore) return false;
+
+        int signals = 0;
+        if (p.grimFlags >= plugin.getConfig().getInt("fair-bans.min-grim-flags", 5)) signals++;
+        if (p.reachFlags >= 3 || p.killauraFlags >= 3) signals++;
+        if (p.speedFlags >= 4 || p.flyFlags >= 3) signals++;
+        if (p.valuableOres >= 8 && p.blocksBroken >= 150) signals++;
+        if (p.scaffoldBursts >= 4 || p.inventoryBursts >= 4) signals++;
+        if (p.spamScore >= 30 || p.botScore >= 20) signals++;
+
+        // Baritone/automation is never sufficient as a standalone permanent-ban signal.
+        if ("BARITONE".equalsIgnoreCase(result.category()) && signals < minSignals) return false;
+
+        return signals >= minSignals;
+    }
+
+    public String banReview(Player player) {
+        Profile p = profile(player.getUniqueId());
+        return "online=" + player.isOnline() +
+                ",score=" + p.score +
+                ",grimFlags=" + p.grimFlags +
+                ",reach=" + p.reachFlags +
+                ",killaura=" + p.killauraFlags +
+                ",speed=" + p.speedFlags +
+                ",fly=" + p.flyFlags +
+                ",valuableOre=" + p.valuableOres +
+                ",scaffoldBursts=" + p.scaffoldBursts +
+                ",inventoryBursts=" + p.inventoryBursts +
+                ",totems=" + p.totemPops +
+                ",lastGrim=" + p.lastGrimCheck;
     }
 
     public void trust(Player player, boolean value) {
@@ -282,6 +405,15 @@ public final class AntiCheatManager {
                 "\nexposedOres=" + p.exposedOres +
                 "\npathRepeats=" + p.pathRepeats +
                 "\ncommands=" + p.commandBursts +
+                "\ngrimFlags=" + p.grimFlags +
+                "\ngrimChecks=" + p.grimChecks +
+                "\nlastGrimCheck=" + p.lastGrimCheck +
+                "\nlastGrimVerbose=" + p.lastGrimVerbose +
+                "\nblocksPlaced=" + p.blocksPlaced +
+                "\nscaffoldBursts=" + p.scaffoldBursts +
+                "\ninventoryBursts=" + p.inventoryBursts +
+                "\ntotemPops=" + p.totemPops +
+                "\nlastTotemHand=" + p.lastTotemHand +
                 "\nlastCategory=" + p.lastCategory +
                 "\nlastConfidence=" + String.format(Locale.US, "%.3f", p.lastConfidence) +
                 "\nlastReason=" + p.lastReason;
@@ -369,6 +501,18 @@ public final class AntiCheatManager {
         int oreYTotal;
         int commandBursts;
         int pathRepeats;
+        int grimFlags;
+        int blocksPlaced;
+        int scaffoldBursts;
+        int inventoryBursts;
+        int totemPops;
+        int autoclickFlags;
+        long recentTeleportUntil;
+        long recentVelocityUntil;
+        String lastGrimCheck = "NONE";
+        String lastGrimVerbose = "";
+        String lastTotemHand = "NONE";
+        final Map<String, Integer> grimChecks = new HashMap<>();
         long lastJoin;
         long lastQuit;
         double lastConfidence;
@@ -378,6 +522,9 @@ public final class AntiCheatManager {
         final Deque<Long> chatTimes = new ArrayDeque<>();
         final Deque<Long> commandTimes = new ArrayDeque<>();
         final Deque<Long> killTimes = new ArrayDeque<>();
+        final Deque<Long> totemTimes = new ArrayDeque<>();
+        final Deque<Long> placeTimes = new ArrayDeque<>();
+        final Deque<Long> inventoryTimes = new ArrayDeque<>();
         final Deque<String> path = new ArrayDeque<>();
         final Deque<String> events = new ArrayDeque<>();
         final AtomicBoolean aiPending = new AtomicBoolean(false);

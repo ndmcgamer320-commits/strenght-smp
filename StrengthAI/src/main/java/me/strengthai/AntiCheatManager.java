@@ -40,6 +40,8 @@ public final class AntiCheatManager {
     }
 
     public void chat(Player player) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.spam", true)) return;
+
         long now = System.currentTimeMillis();
         Profile p = profile(player.getUniqueId());
         p.chatTimes.addLast(now);
@@ -52,6 +54,8 @@ public final class AntiCheatManager {
     }
 
     public void command(Player player) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.spam", true)) return;
+
         Profile p = profile(player.getUniqueId());
         p.commandBursts++;
         p.commandTimes.addLast(System.currentTimeMillis());
@@ -63,6 +67,7 @@ public final class AntiCheatManager {
     }
 
     public void death(Player dead, Player killer) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.bot", true)) return;
         if (killer == null || killer.getUniqueId().equals(dead.getUniqueId())) return;
         plugin.getDataStore().addKill(killer.getUniqueId());
         Profile p = profile(killer.getUniqueId());
@@ -77,6 +82,7 @@ public final class AntiCheatManager {
     }
 
     public void attack(EntityDamageByEntityEvent event) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.combat", true)) return;
         if (!(event.getDamager() instanceof Player player)) return;
         if (player.getGameMode() == GameMode.SPECTATOR) return;
 
@@ -101,6 +107,7 @@ public final class AntiCheatManager {
     }
 
     public void move(PlayerMoveEvent event) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.movement", true)) return;
         if (event.getTo() == null) return;
         Player player = event.getPlayer();
 
@@ -138,7 +145,8 @@ public final class AntiCheatManager {
         while (p.path.size() > max) p.path.removeFirst();
 
         p.pathRepeats = repeatedWindows(p.path);
-        if (p.pathRepeats >= 3) {
+        if (plugin.getConfig().getBoolean("anti-cheat.automation", true) &&
+                p.pathRepeats >= 3) {
             p.baritoneFlags++;
             p.score += 4;
         }
@@ -150,6 +158,8 @@ public final class AntiCheatManager {
     }
 
     public void blockBreak(Player player, Block block) {
+        if (!plugin.getConfig().getBoolean("anti-cheat.mining", true)) return;
+
         Profile p = profile(player.getUniqueId());
         p.blocksBroken++;
 

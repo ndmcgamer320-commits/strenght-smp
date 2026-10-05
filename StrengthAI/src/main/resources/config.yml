@@ -1,0 +1,54 @@
+# StrengthAI 1.0.0
+ai:
+  enabled: true
+  endpoint: "https://openrouter.ai/api/v1/chat/completions"
+  model: "openrouter/auto"
+  referer: "https://ndmcgamer320-commits.github.io/strenght-smp/"
+  title: "Strength SMP AI"
+  timeout-seconds: 25
+  cooldown-seconds: 20
+  review-score: 35
+  reset-confidence: 0.85
+  punish-confidence: 0.93
+  ban-score: 90
+  max-evidence-characters: 7000
+
+web:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  token: ""
+  cors-origin: "*"
+
+anti-cheat:
+  enabled: true
+  auto-actions: true
+  notify-admins: true
+  spam-window-ms: 6000
+  spam-max-messages: 6
+  max-horizontal-speed: 0.72
+  max-air-y-delta: 1.25
+  max-reach: 4.15
+  combat-window-ms: 3000
+  combat-max-hits: 18
+  ore-review-min-blocks: 80
+  ore-review-min-valuable: 4
+  path-history-size: 120
+
+reset-commands:
+  - "strength reset %player%"
+  - "kills reset %player%"
+
+punishment:
+  ban-command: "ban %player% StrengthAI: %category%"
+  kick-command: "kick %player% StrengthAI: %category%"
+  mute-command: "mute %player% 10m StrengthAI: spam"
+
+health:
+  enabled: true
+  log-every-seconds: 60
+  low-tps-threshold: 17.0
+  pause-ai-below-tps: 14.0
+
+messages:
+  prefix: "&8[&bStrengthAI&8] &f"

@@ -13,6 +13,7 @@ ai:
   punish-confidence: 0.93
   ban-score: 90
   max-evidence-characters: 7000
+  max-output-tokens: 1200
 
 web:
   enabled: true
@@ -28,6 +29,8 @@ fair-bans:
   min-score: 150
   min-independent-signals: 3
   min-grim-flags: 8
+  min-hard-grim-flags: 20
+  min-hard-grim-check-flags: 12
   join-grace-seconds: 120
   min-tps: 19.0
   kick-confidence: 0.99
@@ -51,8 +54,12 @@ anti-cheat:
   max-horizontal-speed: 0.72
   max-air-y-delta: 1.25
   max-reach: 4.15
+  aim-mismatch-degrees: 70.0
+  same-target-fast-hits: 12
+  inventory-move-min-distance: 1.2
   combat-window-ms: 3000
-  combat-max-hits: 18
+  combat-max-hits: 24
+  min-path-repeats: 7
   ore-review-min-blocks: 80
   ore-review-min-valuable: 4
   path-history-size: 120

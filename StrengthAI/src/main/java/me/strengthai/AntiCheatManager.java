@@ -109,8 +109,8 @@ public final class AntiCheatManager {
     public void move(PlayerMoveEvent event) {
         if (!plugin.getConfig().getBoolean("anti-cheat.movement", true)) return;
         if (event.getTo() == null) return;
-        Player player = event.getPlayer();
 
+        Player player = event.getPlayer();
         if (player.getGameMode() == GameMode.SPECTATOR ||
                 player.isFlying() ||
                 player.isInsideVehicle() ||
@@ -119,42 +119,145 @@ public final class AntiCheatManager {
 
         Profile p = profile(player.getUniqueId());
 
-        double dx = event.getTo().getX() - event.getFrom().getX();
-        double dz = event.getTo().getZ() - event.getFrom().getZ();
-        double dy = event.getTo().getY() - event.getFrom().getY();
-        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        double x = event.getTo().getX();
+        double y = event.getTo().getY();
+        double z = event.getTo().getZ();
 
-        if (horizontal > plugin.getConfig().getDouble("anti-cheat.max-horizontal-speed", 0.72)) {
-            p.speedFlags++;
-            p.score += 5;
+        double dx = x - event.getFrom().getX();
+        double dz = z - event.getFrom().getZ();
+        double dy = y - event.getFrom().getY();
+
+        double distanceXZ = Math.sqrt(dx * dx + dz * dz);
+
+        long now = System.currentTimeMillis();
+
+        if (p.lastMoveAt > 0) {
+            double seconds = (now - p.lastMoveAt) / 1000.0;
+
+            if (seconds >= 0.04 && seconds <= 0.30 && distanceXZ > 0.01 &&
+                    now >= p.recentTeleportUntil &&
+                    now >= p.recentVelocityUntil) {
+
+                double speed = distanceXZ / seconds;
+
+                double allowed = 7.5;
+                var speedEffect = player.getPotionEffect(
+                        org.bukkit.potion.PotionEffectType.SPEED
+                );
+
+                if (speedEffect != null) {
+                    allowed += (speedEffect.getAmplifier() + 1) * 0.9;
+                }
+
+                // Only count a very large excess repeatedly.
+                if (speed > allowed * 1.45) {
+                    p.speedFlags++;
+                    p.speedStreak++;
+
+                    if (p.speedStreak >= 3) {
+                        p.score += 8;
+                        p.speedEvidenceWindows++;
+                        p.speedStreak = 0;
+
+                        plugin.queueAI(
+                                player,
+                                "SPEED_REVIEW",
+                                evidence(player) +
+                                        "\nmeasuredBlocksPerSecond=" +
+                                        String.format(Locale.US, "%.2f", speed) +
+                                        "\nallowedApprox=" +
+                                        String.format(Locale.US, "%.2f", allowed)
+                        );
+                    }
+                } else {
+                    p.speedStreak = 0;
+                }
+            }
         }
 
-        if (!player.isOnGround() &&
-                dy > plugin.getConfig().getDouble("anti-cheat.max-air-y-delta", 1.25) &&
-                !player.hasPotionEffect(org.bukkit.potion.PotionEffectType.LEVITATION)) {
-            p.flyFlags++;
-            p.score += 8;
+        p.lastMoveAt = now;
+        p.lastX = x;
+        p.lastY = y;
+        p.lastZ = z;
+
+        boolean specialMovement =
+                player.hasPotionEffect(org.bukkit.potion.PotionEffectType.LEVITATION) ||
+                player.hasPotionEffect(org.bukkit.potion.PotionEffectType.SLOW_FALLING) ||
+                isClimbable(player.getLocation().getBlock().getType());
+
+        if (!player.isOnGround() && !specialMovement && now >= p.recentVelocityUntil) {
+            p.airTicks++;
+
+            if (Math.abs(dy) < 0.045 && ++p.airStillSamples >= 12) {
+                p.flyFlags++;
+                p.score += 6;
+                p.airStillSamples = 0;
+
+                plugin.queueAI(
+                        player,
+                        "FLIGHT_REVIEW",
+                        evidence(player) +
+                                "\nairTicks=" + p.airTicks
+                );
+            }
+        } else {
+            p.airTicks = 0;
+            p.airStillSamples = 0;
         }
 
-        String point = (event.getTo().getBlockX() / 2) + ":" +
+        String point =
+                (event.getTo().getBlockX() / 2) + ":" +
                 (event.getTo().getBlockY() / 2) + ":" +
                 (event.getTo().getBlockZ() / 2);
 
         p.path.addLast(point);
-        int max = plugin.getConfig().getInt("anti-cheat.path-history-size", 120);
-        while (p.path.size() > max) p.path.removeFirst();
 
-        p.pathRepeats = repeatedWindows(p.path);
+        int max =
+                plugin.getConfig().getInt(
+                        "anti-cheat.path-history-size",
+                        120
+                );
+
+        while (p.path.size() > max) {
+            p.path.removeFirst();
+        }
+
+        p.pathRepeats =
+                repeatedWindows(p.path);
+
         if (plugin.getConfig().getBoolean("anti-cheat.automation", true) &&
-                p.pathRepeats >= 3) {
+                p.path.size() >= 80 &&
+                p.pathRepeats >= 6) {
+
             p.baritoneFlags++;
-            p.score += 4;
+            p.automationEvidence++;
+            p.score += 2;
+
+            if (p.automationEvidence % 3 == 0) {
+                plugin.queueAI(
+                        player,
+                        "AUTOMATION_REVIEW",
+                        evidence(player)
+                );
+            }
         }
 
         if (p.score >= plugin.getConfig().getInt("ai.review-score", 35) &&
                 p.aiPending.compareAndSet(false, true)) {
-            plugin.queueAI(player, "MOVEMENT_REVIEW", evidence(player));
+            plugin.queueAI(
+                    player,
+                    "MOVEMENT_REVIEW",
+                    evidence(player)
+            );
         }
+    }
+
+    private static boolean isClimbable(Material material) {
+        return material == Material.LADDER ||
+                material == Material.VINE ||
+                material == Material.WEEPING_VINES ||
+                material == Material.TWISTING_VINES ||
+                material == Material.CAVE_VINES;
     }
 
     public void blockBreak(Player player, Block block) {
@@ -164,29 +267,70 @@ public final class AntiCheatManager {
         p.blocksBroken++;
 
         Material type = block.getType();
+
         if (isOre(type)) {
             p.oresBroken++;
-            if (isValuable(type)) p.valuableOres++;
-            p.oreYTotal += block.getY();
 
-            if (block.getRelative(1, 0, 0).getType().isAir() ||
-                    block.getRelative(-1, 0, 0).getType().isAir() ||
-                    block.getRelative(0, 0, 1).getType().isAir() ||
-                    block.getRelative(0, 0, -1).getType().isAir()) {
-                p.exposedOres++;
+            if (isValuable(type)) {
+                p.valuableOres++;
+                p.oreYTotal += block.getY();
+
+                boolean exposed =
+                        block.getRelative(1, 0, 0).getType().isAir() ||
+                        block.getRelative(-1, 0, 0).getType().isAir() ||
+                        block.getRelative(0, 0, 1).getType().isAir() ||
+                        block.getRelative(0, 0, -1).getType().isAir();
+
+                if (exposed) {
+                    p.exposedValuableOres++;
+                }
             }
         }
 
-        if (p.blocksBroken >= plugin.getConfig().getInt("anti-cheat.ore-review-min-blocks", 80) &&
-                p.valuableOres >= plugin.getConfig().getInt("anti-cheat.ore-review-min-valuable", 4)) {
+        int blocksWindow = plugin.getConfig().getInt(
+                "anti-cheat.ore-review-min-blocks",
+                180
+        );
 
-            p.score += 12;
-            plugin.queueAI(player, "MINING_REVIEW", evidence(player));
+        int valuableWindow = plugin.getConfig().getInt(
+                "anti-cheat.ore-review-min-valuable",
+                8
+        );
+
+        if (p.blocksBroken >= blocksWindow &&
+                p.valuableOres >= valuableWindow) {
+
+            int hidden =
+                    Math.max(
+                            0,
+                            p.valuableOres -
+                            p.exposedValuableOres
+                    );
+
+            double hiddenRatio =
+                    p.valuableOres == 0
+                            ? 0.0
+                            : hidden / (double) p.valuableOres;
+
+            if (hiddenRatio >= 0.75) {
+                p.xrayFlags++;
+                p.score += 10;
+
+                plugin.queueAI(
+                        player,
+                        "MINING_REVIEW",
+                        evidence(player) +
+                                "\nhiddenValuableRatio=" +
+                                String.format(Locale.US, "%.3f", hiddenRatio)
+                );
+            } else {
+                p.score += 2;
+            }
 
             p.blocksBroken = 0;
             p.oresBroken = 0;
             p.valuableOres = 0;
-            p.exposedOres = 0;
+            p.exposedValuableOres = 0;
             p.oreYTotal = 0;
         }
     }
@@ -320,12 +464,16 @@ public final class AntiCheatManager {
     public int independentSignals(Player player) {
         Profile p = profile(player.getUniqueId());
         int signals = 0;
+
+        // Only count independent, security-relevant signal families.
         if (p.grimFlags >= plugin.getConfig().getInt("fair-bans.min-grim-flags", 8)) signals++;
         if (p.reachFlags >= 4 || p.killauraFlags >= 4) signals++;
-        if (p.speedFlags >= 6 || p.flyFlags >= 4) signals++;
-        if (p.valuableOres >= 10 && p.blocksBroken >= 180) signals++;
-        if (p.scaffoldBursts >= 6 || p.inventoryBursts >= 6) signals++;
-        if (p.spamScore >= 40 || p.botScore >= 30) signals++;
+        if (p.speedEvidenceWindows >= 2 || p.flyFlags >= 4) signals++;
+        if (p.xrayFlags >= 2) signals++;
+        if (p.botScore >= 30 && p.killTimes.size() >= 10) signals++;
+
+        // Weak telemetry such as spam, inventory clicks, and Baritone-like paths
+        // never counts as a permanent-ban signal by itself.
         return signals;
     }
 
@@ -409,6 +557,8 @@ public final class AntiCheatManager {
                 ",speed=" + p.speedFlags +
                 ",fly=" + p.flyFlags +
                 ",valuableOre=" + p.valuableOres +
+                ",xrayFlags=" + p.xrayFlags +
+                ",speedWindows=" + p.speedEvidenceWindows +
                 ",scaffoldBursts=" + p.scaffoldBursts +
                 ",inventoryBursts=" + p.inventoryBursts +
                 ",totems=" + p.totemPops +
@@ -544,6 +694,17 @@ public final class AntiCheatManager {
         int commandBursts;
         int pathRepeats;
         int grimFlags;
+        int xrayFlags;
+        int exposedValuableOres;
+        int speedEvidenceWindows;
+        int speedStreak;
+        int airTicks;
+        int airStillSamples;
+        int automationEvidence;
+        long lastMoveAt;
+        double lastX;
+        double lastY;
+        double lastZ;
         int blocksPlaced;
         int scaffoldBursts;
         int inventoryBursts;

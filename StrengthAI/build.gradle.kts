@@ -9,10 +9,12 @@ description = "AI-powered anti-cheat and server control for Strength SMP"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
+    maven { url = uri("https://repo.grim.ac/snapshots") }
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+    compileOnly("ac.grim.grimac:GrimAPI:1.3.2.1")
 }
 
 java {

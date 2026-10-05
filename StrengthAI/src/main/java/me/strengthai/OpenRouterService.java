@@ -40,11 +40,14 @@ public final class OpenRouterService implements AutoCloseable {
         JsonObject system = new JsonObject();
         system.addProperty("role", "system");
         system.addProperty("content",
-                "You are the security reviewer for a Minecraft Paper server. " +
-                "Analyze only supplied evidence and be conservative. Never invent facts. " +
-                "Return only JSON with keys verdict, category, confidence, severity, reason, actions. " +
+                "You are the security classifier for a Minecraft Paper server. " +
+                "Use only the supplied evidence; never invent facts. " +
+                "Return exactly one JSON object matching the requested schema. " +
+                "Do not write analysis, Markdown, explanations outside the JSON, or arrays for actions. " +
                 "verdict=SAFE|WATCH|CHEAT. category=NONE|XRAY|KILLAURA|REACH|FLY|SPEED|BARITONE|SPAM|BOT|OTHER. " +
-                "actions may only be NONE|WATCH|KICK|BAN|MUTE|RESET_STRENGTH. Only recommend BAN for strong evidence.");
+                "actions is one value: NONE|WATCH|KICK|BAN|MUTE|RESET_STRENGTH. " +
+                "Treat repeated authoritative Grim flags as stronger evidence than heuristic Baritone/path telemetry. " +
+                "Never recommend BAN for a single weak heuristic.");
         messages.add(system);
 
         JsonObject user = new JsonObject();
@@ -56,12 +59,61 @@ public final class OpenRouterService implements AutoCloseable {
 
         body.add("messages", messages);
         body.addProperty("temperature", 0.1);
-        body.addProperty("max_tokens", 900);
+        body.addProperty("max_tokens", plugin.getConfig().getInt("ai.max-output-tokens", 1200));
 
-        // Request a JSON object instead of free-form text when the selected
-        // OpenRouter model/provider supports structured JSON output.
+        JsonObject provider = new JsonObject();
+        provider.addProperty("require_parameters", true);
+        body.add("provider", provider);
+
         JsonObject responseFormat = new JsonObject();
-        responseFormat.addProperty("type", "json_object");
+        responseFormat.addProperty("type", "json_schema");
+
+        JsonObject schemaWrapper = new JsonObject();
+        schemaWrapper.addProperty("name", "strengthai_decision");
+        schemaWrapper.addProperty("strict", true);
+
+        JsonObject schema = new JsonObject();
+        schema.addProperty("type", "object");
+
+        JsonObject properties = new JsonObject();
+
+        JsonObject verdict = new JsonObject();
+        verdict.addProperty("type", "string");
+        properties.add("verdict", verdict);
+
+        JsonObject category = new JsonObject();
+        category.addProperty("type", "string");
+        properties.add("category", category);
+
+        JsonObject confidence = new JsonObject();
+        confidence.addProperty("type", "number");
+        confidence.addProperty("description", "Confidence from 0 to 1.");
+        properties.add("confidence", confidence);
+
+        JsonObject severity = new JsonObject();
+        severity.addProperty("type", "string");
+        properties.add("severity", severity);
+
+        JsonObject reason = new JsonObject();
+        reason.addProperty("type", "string");
+        properties.add("reason", reason);
+
+        JsonObject actions = new JsonObject();
+        actions.addProperty("type", "string");
+        actions.addProperty("description", "One action only: NONE, WATCH, KICK, BAN, MUTE, or RESET_STRENGTH.");
+        properties.add("actions", actions);
+
+        schema.add("properties", properties);
+
+        JsonArray required = new JsonArray();
+        for (String keyName : List.of("verdict", "category", "confidence", "severity", "reason", "actions")) {
+            required.add(keyName);
+        }
+        schema.add("required", required);
+        schema.addProperty("additionalProperties", false);
+
+        schemaWrapper.add("schema", schema);
+        responseFormat.add("json_schema", schemaWrapper);
         body.add("response_format", responseFormat);
 
         HttpRequest.Builder b = HttpRequest.newBuilder()
@@ -176,10 +228,7 @@ public final class OpenRouterService implements AutoCloseable {
             double confidence =
                     number(o, "confidence", 0);
 
-            int severity =
-                    (int) Math.round(
-                            number(o, "severity", 0)
-                    );
+            int severity = severityValue(o.get("severity"));
 
             String reason =
                     get(
@@ -188,22 +237,25 @@ public final class OpenRouterService implements AutoCloseable {
                             "No reason provided."
                     );
 
-            List<String> actions =
-                    new ArrayList<>();
+            List<String> actions = new ArrayList<>();
+            JsonElement actionsElement = o.get("actions");
 
-            JsonArray arr =
-                    o.getAsJsonArray("actions");
-
-            if (arr != null) {
-                for (JsonElement e : arr) {
-                    if (e != null && !e.isJsonNull()) {
-                        actions.add(
-                                e.getAsString()
-                                        .toUpperCase(Locale.ROOT)
-                        );
+            if (actionsElement != null && !actionsElement.isJsonNull()) {
+                if (actionsElement.isJsonArray()) {
+                    for (JsonElement e : actionsElement.getAsJsonArray()) {
+                        if (e != null && !e.isJsonNull()) {
+                            actions.add(e.getAsString().toUpperCase(Locale.ROOT));
+                        }
+                    }
+                } else if (actionsElement.isJsonPrimitive()) {
+                    String value = actionsElement.getAsString().trim();
+                    if (!value.isBlank()) {
+                        actions.add(value.toUpperCase(Locale.ROOT));
                     }
                 }
             }
+
+            if (actions.isEmpty()) actions.add("NONE");
 
             confidence =
                     Math.max(
@@ -232,6 +284,32 @@ public final class OpenRouterService implements AutoCloseable {
                     trim(raw, 800)
             );
         }
+    }
+
+    private static int severityValue(JsonElement element) {
+        if (element == null || element.isJsonNull()) return 0;
+
+        try {
+            if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isNumber()) {
+                return (int) Math.round(element.getAsDouble());
+            }
+        } catch (Exception ignored) {
+        }
+
+        String value;
+        try {
+            value = element.getAsString().trim().toUpperCase(Locale.ROOT);
+        } catch (Exception e) {
+            return 0;
+        }
+
+        return switch (value) {
+            case "LOW" -> 25;
+            case "MEDIUM", "MED" -> 50;
+            case "HIGH" -> 80;
+            case "CRITICAL", "SEVERE" -> 100;
+            default -> 0;
+        };
     }
 
     private static String get(JsonObject o, String key, String fallback) {

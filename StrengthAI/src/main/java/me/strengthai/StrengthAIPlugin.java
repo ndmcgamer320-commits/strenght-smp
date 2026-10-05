@@ -357,7 +357,14 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
             return true;
         }
 
-        switch (args[0].toLowerCase(Locale.ROOT)) {
+        String sub = args[0].toLowerCase(Locale.ROOT);
+
+        if (sub.equals("admin") || sub.equals("dashboard") || sub.equals("panel")) {
+            adminDashboard(sender);
+            return true;
+        }
+
+        switch (sub) {
             case "help" -> help(sender);
 
             case "status" -> {
@@ -535,10 +542,196 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
                 sender.sendMessage(prefix() + "&aStrengthAI config reloaded.");
             }
 
-            default -> sender.sendMessage(prefix() + "&cUnknown command. Use /strengthai help");
+            case "scanall" -> {
+                int queued = 0;
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    if (antiCheat.isTrusted(player)) continue;
+                    antiCheat.profile(player.getUniqueId()).aiPending.set(true);
+                    queueAI(player, "ADMIN_SCAN_ALL", antiCheat.evidence(player));
+                    queued++;
+                }
+                sender.sendMessage(prefix() + "&aQueued AI scans for &f" + queued + " &aplayers.");
+            }
+
+            case "config" -> configCommand(sender, args);
+
+            case "detectors" -> detectorCommand(sender, args);
+
+            case "report" -> {
+                if (args.length < 3) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai report <player> <reason>");
+                    return true;
+                }
+
+                Player target = Bukkit.getPlayerExact(args[1]);
+                if (target == null) {
+                    sender.sendMessage(prefix() + "&cPlayer not online.");
+                    return true;
+                }
+
+                StringBuilder reason = new StringBuilder();
+                for (int i = 2; i < args.length; i++) {
+                    if (i > 2) reason.append(' ');
+                    reason.append(args[i]);
+                }
+
+                addEvent("Admin report: " + target.getName() + " | " + reason);
+                antiCheat.profile(target.getUniqueId()).score += 12;
+                queueAI(target, "ADMIN_REPORT", antiCheat.evidence(target) + "\nreport=" + reason);
+                sender.sendMessage(prefix() + "&aReport submitted to AI for &f" + target.getName() + "&a.");
+            }
+
+            case "player" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai player <player>");
+                    return true;
+                }
+
+                Player target = Bukkit.getPlayerExact(args[1]);
+                if (target == null) {
+                    sender.sendMessage(prefix() + "&cPlayer not online.");
+                    return true;
+                }
+
+                sender.sendMessage(prefix() + "&bPlayer: &f" + target.getName());
+                sender.sendMessage(prefix() + "&7" + antiCheat.evidence(target));
+                sender.sendMessage(prefix() + "&7World=&f" + target.getWorld().getName() +
+                        " &7Ping=&f" + target.getPing());
+            }
+
+            case "debug" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(prefix() + "&cUsage: /strenthai debug <on|off>");
+                    return true;
+                }
+
+                boolean enabled = args[1].equalsIgnoreCase("on");
+                getConfig().set("debug", enabled);
+                saveConfig();
+                sender.sendMessage(prefix() + "&aDebug logging " + (enabled ? "enabled" : "disabled") + ".");
+            }
+
+            default -> sender.sendMessage(prefix() + "&cUnknown command. Use /strenthai admin");
         }
 
         return true;
+    }
+
+    private void adminDashboard(CommandSender sender) {
+        double tps = Bukkit.getTPS()[0];
+        sender.sendMessage(prefix() + "&b════════ StrengthAI Admin ════════");
+        sender.sendMessage(prefix() + "&7AI: &f" + (ai.configured() ? "READY" : "NOT CONFIGURED"));
+        sender.sendMessage(prefix() + "&7Model: &f" + getConfig().getString("ai.model", "openrouter/auto"));
+        sender.sendMessage(prefix() + "&7Anti-cheat: &f" + (getConfig().getBoolean("anti-cheat.enabled", true) ? "ON" : "OFF"));
+        sender.sendMessage(prefix() + "&7Auto actions: &f" + (getConfig().getBoolean("anti-cheat.auto-actions", true) ? "ON" : "OFF"));
+        sender.sendMessage(prefix() + "&7Players: &f" + Bukkit.getOnlinePlayers().size());
+        sender.sendMessage(prefix() + "&7TPS: &f" + String.format(Locale.US, "%.2f", tps));
+        sender.sendMessage(prefix() + "&7Web API: &f" + (getConfig().getBoolean("web.enabled", true) ? "ON" : "OFF"));
+        sender.sendMessage(prefix() + "&7Use &f/strenthai help &7for the full command list.");
+    }
+
+    private void configCommand(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(prefix() + "&cUsage: /strenthai config <get|set|save> <path> [value]");
+            return;
+        }
+
+        String action = args[1].toLowerCase(Locale.ROOT);
+
+        if (action.equals("save")) {
+            saveConfig();
+            sender.sendMessage(prefix() + "&aConfiguration saved.");
+            return;
+        }
+
+        if (args.length < 3) {
+            sender.sendMessage(prefix() + "&cMissing config path.");
+            return;
+        }
+
+        String path = args[2];
+
+        if (action.equals("get")) {
+            Object value = getConfig().get(path);
+            sender.sendMessage(prefix() + "&7" + path + " = &f" + (value == null ? "<missing>" : value));
+            return;
+        }
+
+        if (!action.equals("set")) {
+            sender.sendMessage(prefix() + "&cUnknown config action.");
+            return;
+        }
+
+        if (args.length < 4) {
+            sender.sendMessage(prefix() + "&cUsage: /strenthai config set <path> <value>");
+            return;
+        }
+
+        StringBuilder valueBuilder = new StringBuilder();
+        for (int i = 3; i < args.length; i++) {
+            if (i > 3) valueBuilder.append(' ');
+            valueBuilder.append(args[i]);
+        }
+
+        String raw = valueBuilder.toString();
+        Object value;
+
+        if (raw.equalsIgnoreCase("true") || raw.equalsIgnoreCase("false")) {
+            value = Boolean.parseBoolean(raw);
+        } else {
+            try {
+                if (raw.matches("-?\\d+")) value = Integer.parseInt(raw);
+                else value = Double.parseDouble(raw);
+            } catch (NumberFormatException e) {
+                value = raw;
+            }
+        }
+
+        getConfig().set(path, value);
+        saveConfig();
+
+        sender.sendMessage(prefix() + "&aSet &f" + path + " &ato &f" + value);
+    }
+
+    private void detectorCommand(CommandSender sender, String[] args) {
+        Map<String, String> paths = Map.of(
+                "movement", "anti-cheat.movement",
+                "combat", "anti-cheat.combat",
+                "reach", "anti-cheat.reach",
+                "mining", "anti-cheat.mining",
+                "spam", "anti-cheat.spam",
+                "bot", "anti-cheat.bot"
+        );
+
+        if (args.length == 1) {
+            sender.sendMessage(prefix() + "&bDetector status");
+            for (Map.Entry<String, String> entry : paths.entrySet()) {
+                sender.sendMessage(prefix() + "&f" + entry.getKey() + "&7 = &f" +
+                        (getConfig().getBoolean(entry.getValue(), true) ? "ON" : "OFF"));
+            }
+            sender.sendMessage(prefix() + "&7Use /strenthai detectors <name> on|off");
+            return;
+        }
+
+        String name = args[1].toLowerCase(Locale.ROOT);
+        String path = paths.get(name);
+
+        if (path == null || args.length < 3) {
+            sender.sendMessage(prefix() + "&cUnknown detector or missing on/off.");
+            return;
+        }
+
+        if (!args[2].equalsIgnoreCase("on") &&
+                !args[2].equalsIgnoreCase("off")) {
+            sender.sendMessage(prefix() + "&cUse on or off.");
+            return;
+        }
+
+        boolean enabled = args[2].equalsIgnoreCase("on");
+        getConfig().set(path, enabled);
+        saveConfig();
+
+        sender.sendMessage(prefix() + "&aDetector &f" + name + " &a" + (enabled ? "enabled" : "disabled") + ".");
     }
 
     private void apiCommand(CommandSender sender, String[] args) {
@@ -586,21 +779,25 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
     }
 
     private void help(CommandSender sender) {
-        sender.sendMessage(prefix() + "&bStrengthAI commands");
-        sender.sendMessage("&f/api set <key> &7- configure OpenRouter");
-        sender.sendMessage("&f/api status &7- check AI configuration");
-        sender.sendMessage("&f/api model <provider/model> &7- choose AI model");
-        sender.sendMessage("&f/sai scan <player> &7- AI anti-cheat scan");
-        sender.sendMessage("&f/sai inspect <player> &7- evidence + AI scan");
-        sender.sendMessage("&f/sai stats <player> &7- detailed local evidence");
-        sender.sendMessage("&f/sai reset <player> &7- reset kills/strength hooks");
-        sender.sendMessage("&f/sai punish <player> <ban|kick|mute>");
-        sender.sendMessage("&f/sai trust|untrust <player>");
-        sender.sendMessage("&f/sai watch|unwatch <player>");
-        sender.sendMessage("&f/sai webtoken rotate &7- rotate website API token");
-        sender.sendMessage("&f/sai status &7- plugin/server status");
-        sender.sendMessage("&f/sai events [count] &7- recent AI events");
-        sender.sendMessage("&f/sai reload &7- reload config");
+        sender.sendMessage(prefix() + "&bStrengthAI / Strenthai");
+        sender.sendMessage(prefix() + "&f/strenthai admin &7- admin dashboard");
+        sender.sendMessage(prefix() + "&f/strenthai status &7- plugin/server status");
+        sender.sendMessage(prefix() + "&f/strenthai scan <player> &7- AI scan");
+        sender.sendMessage(prefix() + "&f/strenthai scanall &7- scan all online players");
+        sender.sendMessage(prefix() + "&f/strenthai player <player> &7- player evidence");
+        sender.sendMessage(prefix() + "&f/strenthai report <player> <reason> &7- send evidence to AI");
+        sender.sendMessage(prefix() + "&f/strenthai config get|set|save <path> [value]");
+        sender.sendMessage(prefix() + "&f/strenthai detectors &7- detector status");
+        sender.sendMessage(prefix() + "&f/strenthai detectors <name> on|off");
+        sender.sendMessage(prefix() + "&f/strenthai reset <player>");
+        sender.sendMessage(prefix() + "&f/strenthai punish <player> <ban|kick|mute>");
+        sender.sendMessage(prefix() + "&f/strenthai trust|untrust <player>");
+        sender.sendMessage(prefix() + "&f/strenthai watch|unwatch <player>");
+        sender.sendMessage(prefix() + "&f/strenthai api set|status|clear|model");
+        sender.sendMessage(prefix() + "&f/strenthai webtoken rotate");
+        sender.sendMessage(prefix() + "&f/strenthai events [count]");
+        sender.sendMessage(prefix() + "&f/strenthai debug on|off");
+        sender.sendMessage(prefix() + "&f/strenthai reload");
     }
 
     @Override
@@ -613,19 +810,27 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
         if (args.length == 1) {
             return List.of(
                     "help",
+                    "admin",
+                    "dashboard",
                     "status",
                     "api",
                     "scan",
+                    "scanall",
                     "inspect",
                     "stats",
+                    "player",
+                    "report",
                     "reset",
                     "punish",
                     "trust",
                     "untrust",
                     "watch",
                     "unwatch",
+                    "detectors",
+                    "config",
                     "webtoken",
                     "events",
+                    "debug",
                     "reload"
             ).stream()
                     .filter(v -> v.startsWith(args[0].toLowerCase(Locale.ROOT)))

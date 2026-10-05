@@ -376,7 +376,7 @@ public final class AntiCheatManager {
         Profile p = profile(player.getUniqueId());
         OpenRouterService.AIResult synthetic =
                 new OpenRouterService.AIResult(
-                        p.lastCategory,
+                        "CHEAT",
                         p.lastCategory,
                         p.lastConfidence,
                         0,

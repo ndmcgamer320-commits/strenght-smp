@@ -1,0 +1,40 @@
+name: Build StrengthAI Plugin
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'StrengthAI/**'
+      - '.github/workflows/build-strength-ai.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: StrengthAI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Build
+        run: gradle build --no-daemon
+
+      - name: Upload plugin JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: StrengthAI
+          path: StrengthAI/build/libs/StrengthAI-*.jar
+          if-no-files-found: error

@@ -217,7 +217,7 @@ public final class AntiCheatManager {
 
         boolean confirmed =
                 "CHEAT".equalsIgnoreCase(result.verdict()) &&
-                result.confidence() >= plugin.getConfig().getDouble("ai.reset-confidence", 0.85);
+                result.confidence() >= plugin.getConfig().getDouble("ai.review-confidence", 0.90);
 
         if (!confirmed) return;
 
@@ -228,8 +228,9 @@ public final class AntiCheatManager {
                 " &7(" + String.format(Locale.US, "%.0f%%", result.confidence() * 100) +
                 ") &8- &f" + result.reason());
 
-        if (result.actions().contains("RESET_STRENGTH") ||
-                result.confidence() >= plugin.getConfig().getDouble("ai.reset-confidence", 0.85)) {
+        if (result.actions().contains("RESET_STRENGTH") &&
+                result.confidence() >= plugin.getConfig().getDouble("fair-bans.reset-confidence", 0.95) &&
+                p.score >= plugin.getConfig().getInt("fair-bans.reset-score", 80)) {
             plugin.resetPlayer(player);
         }
 
@@ -316,45 +317,86 @@ public final class AntiCheatManager {
         }
     }
 
+    public int independentSignals(Player player) {
+        Profile p = profile(player.getUniqueId());
+        int signals = 0;
+        if (p.grimFlags >= plugin.getConfig().getInt("fair-bans.min-grim-flags", 8)) signals++;
+        if (p.reachFlags >= 4 || p.killauraFlags >= 4) signals++;
+        if (p.speedFlags >= 6 || p.flyFlags >= 4) signals++;
+        if (p.valuableOres >= 10 && p.blocksBroken >= 180) signals++;
+        if (p.scaffoldBursts >= 6 || p.inventoryBursts >= 6) signals++;
+        if (p.spamScore >= 40 || p.botScore >= 30) signals++;
+        return signals;
+    }
+
     public boolean banEligible(Player player, OpenRouterService.AIResult result) {
         Profile p = profile(player.getUniqueId());
 
+        if (!plugin.getConfig().getBoolean("fair-bans.enabled", true)) return false;
+        if (!plugin.getConfig().getBoolean("fair-bans.auto-ban", true)) return false;
         if (!player.isOnline()) return false;
         if (isTrusted(player)) return false;
 
-        long grace = plugin.getConfig().getLong("fair-bans.join-grace-seconds", 60L) * 1000L;
-        if (System.currentTimeMillis() - p.lastJoin < grace) return false;
+        long now = System.currentTimeMillis();
 
-        if (p.recentTeleportUntil > System.currentTimeMillis() ||
-                p.recentVelocityUntil > System.currentTimeMillis()) {
+        long grace = plugin.getConfig().getLong("fair-bans.join-grace-seconds", 120L) * 1000L;
+        if (now - p.lastJoin < grace) return false;
+
+        if (p.recentTeleportUntil > now ||
+                p.recentVelocityUntil > now) {
             return false;
         }
 
         double tps = Bukkit.getTPS()[0];
-        if (tps > 0 && tps < plugin.getConfig().getDouble("fair-bans.min-tps", 18.0)) {
+        if (tps > 0 && tps < plugin.getConfig().getDouble("fair-bans.min-tps", 19.0)) {
             return false;
         }
 
         if (!"CHEAT".equalsIgnoreCase(result.verdict())) return false;
+        if (!result.actions().contains("BAN")) return false;
 
         double minConfidence = plugin.getConfig().getDouble("fair-bans.min-ai-confidence", 0.98);
-        int minScore = plugin.getConfig().getInt("fair-bans.min-score", 120);
-        int minSignals = plugin.getConfig().getInt("fair-bans.min-independent-signals", 2);
+        int minScore = plugin.getConfig().getInt("fair-bans.min-score", 150);
+        int minSignals = plugin.getConfig().getInt("fair-bans.min-independent-signals", 3);
 
         if (result.confidence() < minConfidence || p.score < minScore) return false;
 
-        int signals = 0;
-        if (p.grimFlags >= plugin.getConfig().getInt("fair-bans.min-grim-flags", 5)) signals++;
-        if (p.reachFlags >= 3 || p.killauraFlags >= 3) signals++;
-        if (p.speedFlags >= 4 || p.flyFlags >= 3) signals++;
-        if (p.valuableOres >= 8 && p.blocksBroken >= 150) signals++;
-        if (p.scaffoldBursts >= 4 || p.inventoryBursts >= 4) signals++;
-        if (p.spamScore >= 30 || p.botScore >= 20) signals++;
+        int signals = independentSignals(player);
 
-        // Baritone/automation is never sufficient as a standalone permanent-ban signal.
-        if ("BARITONE".equalsIgnoreCase(result.category()) && signals < minSignals) return false;
+        // Baritone/automation can inform a review, but can never be the sole reason for a ban.
+        if (("BARITONE".equalsIgnoreCase(result.category()) ||
+             "BOT".equalsIgnoreCase(result.category())) && signals < minSignals) {
+            return false;
+        }
 
         return signals >= minSignals;
+    }
+
+    public boolean currentBanEligible(Player player) {
+        Profile p = profile(player.getUniqueId());
+        OpenRouterService.AIResult synthetic =
+                new OpenRouterService.AIResult(
+                        p.lastCategory,
+                        p.lastCategory,
+                        p.lastConfidence,
+                        0,
+                        p.lastReason,
+                        List.of("BAN"),
+                        false
+                );
+        return banEligible(player, synthetic);
+    }
+
+    public void clearFlags(Player player) {
+        Profile old = profiles.get(player.getUniqueId());
+        if (old == null) return;
+
+        profiles.put(
+                player.getUniqueId(),
+                new Profile()
+        );
+        profiles.get(player.getUniqueId()).lastJoin = old.lastJoin;
+        profiles.get(player.getUniqueId()).aiPending.set(false);
     }
 
     public String banReview(Player player) {

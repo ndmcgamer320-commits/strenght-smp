@@ -21,6 +21,20 @@ web:
   token: ""
   cors-origin: "*"
 
+fair-bans:
+  enabled: true
+  auto-ban: true
+  min-ai-confidence: 0.98
+  min-score: 150
+  min-independent-signals: 3
+  min-grim-flags: 8
+  join-grace-seconds: 120
+  min-tps: 19.0
+  kick-confidence: 0.99
+  kick-score: 70
+  reset-confidence: 0.95
+  reset-score: 80
+
 anti-cheat:
   enabled: true
   auto-actions: true

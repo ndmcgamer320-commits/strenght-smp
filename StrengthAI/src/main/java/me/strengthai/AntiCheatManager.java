@@ -250,6 +250,11 @@ public final class AntiCheatManager {
         return trusted.contains(player.getUniqueId());
     }
 
+    public void watch(Player player, boolean value) {
+        if (value) watch.add(player.getUniqueId());
+        else watch.remove(player.getUniqueId());
+    }
+
     public String evidence(Player player) {
         Profile p = profile(player.getUniqueId());
         return "score=" + p.score +

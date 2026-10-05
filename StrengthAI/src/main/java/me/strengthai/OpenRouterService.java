@@ -56,7 +56,13 @@ public final class OpenRouterService implements AutoCloseable {
 
         body.add("messages", messages);
         body.addProperty("temperature", 0.1);
-        body.addProperty("max_tokens", 600);
+        body.addProperty("max_tokens", 900);
+
+        // Request a JSON object instead of free-form text when the selected
+        // OpenRouter model/provider supports structured JSON output.
+        JsonObject responseFormat = new JsonObject();
+        responseFormat.addProperty("type", "json_object");
+        body.add("response_format", responseFormat);
 
         HttpRequest.Builder b = HttpRequest.newBuilder()
                 .uri(URI.create(plugin.getConfig().getString("ai.endpoint", "https://openrouter.ai/api/v1/chat/completions")))
@@ -80,35 +86,151 @@ public final class OpenRouterService implements AutoCloseable {
                 JsonArray choices = root.getAsJsonArray("choices");
                 if (choices == null || choices.isEmpty()) return AIResult.error("OpenRouter returned no choices.");
 
-                JsonObject msg = choices.get(0).getAsJsonObject().getAsJsonObject("message");
-                return parse(msg.get("content").getAsString());
+                JsonObject choice = choices.get(0).getAsJsonObject();
+                JsonObject msg = choice.has("message") && choice.get("message").isJsonObject()
+                        ? choice.getAsJsonObject("message")
+                        : new JsonObject();
+
+                String content = extractMessageText(msg);
+
+                if (content.isBlank()) {
+                    String finishReason = choice.has("finish_reason")
+                            ? choice.get("finish_reason").getAsString()
+                            : "unknown";
+                    return AIResult.error(
+                            "OpenRouter returned empty message content (finish_reason=" +
+                            finishReason + ")."
+                    );
+                }
+
+                return parse(content);
             } catch (Exception e) {
                 return AIResult.error(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             }
         }, executor);
     }
 
+    private String extractMessageText(JsonObject message) {
+        if (message == null || message.isEmpty()) return "";
+
+        JsonElement content = message.get("content");
+
+        if (content != null && !content.isJsonNull()) {
+            if (content.isJsonPrimitive()) {
+                return content.getAsString();
+            }
+
+            if (content.isJsonArray()) {
+                StringBuilder out = new StringBuilder();
+
+                for (JsonElement item : content.getAsJsonArray()) {
+                    if (item.isJsonPrimitive()) {
+                        out.append(item.getAsString());
+                    } else if (item.isJsonObject()) {
+                        JsonObject obj = item.getAsJsonObject();
+                        if (obj.has("text") && !obj.get("text").isJsonNull()) {
+                            out.append(obj.get("text").getAsString());
+                        }
+                    }
+                }
+
+                if (!out.isEmpty()) return out.toString();
+            }
+        }
+
+        return "";
+    }
+
     private AIResult parse(String raw) {
-        String clean = raw.trim();
+        String clean = raw == null ? "" : raw.trim();
+
+        // Remove an optional Markdown JSON fence.
+        if (clean.startsWith("```")) {
+            int newline = clean.indexOf('\n');
+            int closing = clean.lastIndexOf("```");
+
+            if (newline > 0 && closing > newline) {
+                clean = clean.substring(newline + 1, closing).trim();
+            }
+        }
+
+        // Ignore any prose around the JSON object.
         int first = clean.indexOf('{');
         int last = clean.lastIndexOf('}');
-        if (first >= 0 && last > first) clean = clean.substring(first, last + 1);
+
+        if (first >= 0 && last > first) {
+            clean = clean.substring(first, last + 1).trim();
+        }
 
         try {
             JsonObject o = JsonParser.parseString(clean).getAsJsonObject();
-            String verdict = get(o, "verdict", "WATCH").toUpperCase(Locale.ROOT);
-            String category = get(o, "category", "OTHER").toUpperCase(Locale.ROOT);
-            double confidence = number(o, "confidence", 0);
-            int severity = (int) Math.round(number(o, "severity", 0));
-            String reason = get(o, "reason", "No reason provided.");
 
-            List<String> actions = new ArrayList<>();
-            JsonArray arr = o.getAsJsonArray("actions");
-            if (arr != null) for (JsonElement e : arr) actions.add(e.getAsString().toUpperCase(Locale.ROOT));
+            String verdict =
+                    get(o, "verdict", "WATCH")
+                            .toUpperCase(Locale.ROOT);
 
-            return new AIResult(verdict, category, confidence, severity, reason, actions, false);
+            String category =
+                    get(o, "category", "OTHER")
+                            .toUpperCase(Locale.ROOT);
+
+            double confidence =
+                    number(o, "confidence", 0);
+
+            int severity =
+                    (int) Math.round(
+                            number(o, "severity", 0)
+                    );
+
+            String reason =
+                    get(
+                            o,
+                            "reason",
+                            "No reason provided."
+                    );
+
+            List<String> actions =
+                    new ArrayList<>();
+
+            JsonArray arr =
+                    o.getAsJsonArray("actions");
+
+            if (arr != null) {
+                for (JsonElement e : arr) {
+                    if (e != null && !e.isJsonNull()) {
+                        actions.add(
+                                e.getAsString()
+                                        .toUpperCase(Locale.ROOT)
+                        );
+                    }
+                }
+            }
+
+            confidence =
+                    Math.max(
+                            0.0,
+                            Math.min(1.0, confidence)
+                    );
+
+            severity =
+                    Math.max(
+                            0,
+                            Math.min(100, severity)
+                    );
+
+            return new AIResult(
+                    verdict,
+                    category,
+                    confidence,
+                    severity,
+                    reason,
+                    actions,
+                    false
+            );
         } catch (Exception e) {
-            return AIResult.error("AI returned invalid JSON: " + trim(raw, 500));
+            return AIResult.error(
+                    "AI returned invalid JSON: " +
+                    trim(raw, 800)
+            );
         }
     }
 

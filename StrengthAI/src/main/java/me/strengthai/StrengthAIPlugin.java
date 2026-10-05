@@ -18,6 +18,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin implements Listener, TabExecutor {
@@ -28,7 +29,7 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
     private GrimBridge grimBridge;
     private BukkitTask periodicTask;
     private final Deque<String> recentEvents = new ConcurrentLinkedDeque<>();
-    private final AtomicLong lastAIRequest = new AtomicLong(0);
+    private final Map<UUID, Long> lastAIRequestAt = new ConcurrentHashMap<>();
     private long lastHealthLog;
 
     @Override
@@ -84,6 +85,7 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
 
     @Override
     public void onDisable() {
+        lastAIRequestAt.clear();
         if (periodicTask != null) periodicTask.cancel();
         if (web != null) web.close();
         if (grimBridge != null) grimBridge.disable();
@@ -135,16 +137,16 @@ public final class StrengthAIPlugin extends org.bukkit.plugin.java.JavaPlugin im
         long cooldown = getConfig().getLong("ai.cooldown-seconds", 20L) * 1000L;
 
         if (!"PLAYER_JOIN".equals(event)) {
-            long previous = lastAIRequest.get();
+            UUID playerId = player.getUniqueId();
+            long previous = lastAIRequestAt.getOrDefault(playerId, 0L);
             if (now - previous < cooldown) {
-                antiCheat.profile(player.getUniqueId()).aiPending.set(false);
+                antiCheat.profile(playerId).aiPending.set(false);
                 return;
             }
 
-            if (!lastAIRequest.compareAndSet(previous, now)) {
-                antiCheat.profile(player.getUniqueId()).aiPending.set(false);
-                return;
-            }
+            // Cool down per player, not globally. One flagged player must not
+            // block AI reviews for another player.
+            lastAIRequestAt.put(playerId, now);
         }
 
         addEvent("AI review queued: " + player.getName() + " | " + event);
